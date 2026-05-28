@@ -12,6 +12,8 @@ export interface FlowUserStatus {
   source?: string;
   accountId?: string;
   updatedAt?: string;
+  paygateTier?: string | null;
+  credits?: number | null;
 }
 
 export interface PackageInfo {
@@ -78,7 +80,12 @@ export class ExtensionService implements OnModuleInit {
     try {
       const msg = JSON.parse(raw);
       if (msg.type === 'flow_user_status') {
-        this.flowUser = { ...msg.user, updatedAt: new Date().toISOString() };
+        this.flowUser = {
+          ...msg.user,
+          paygateTier: msg.paygateTier ?? null,
+          credits: typeof msg.credits === 'number' ? msg.credits : null,
+          updatedAt: new Date().toISOString(),
+        };
         if (msg.extensionPackage?.name && msg.extensionPackage?.version) {
           this.extensionPackage = msg.extensionPackage;
         }

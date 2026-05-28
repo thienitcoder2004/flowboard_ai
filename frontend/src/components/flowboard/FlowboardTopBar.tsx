@@ -27,11 +27,13 @@ export default function FlowboardTopBar({ projectName, status }: Props) {
         <StatusDot ok={Boolean(status?.agent?.connected)} label="agent" />
         <StatusDot ok={Boolean(status?.extension?.connected)} label="extension" />
         <StatusDot
-          ok={Boolean(status?.googleFlow?.loggedIn)}
+          ok={Boolean(status?.googleFlow?.loggedIn || typeof status?.googleFlow?.credits === "number")}
           label={
             status?.googleFlow?.loggedIn
-              ? `Google Flow: ${status.googleFlow.label || status.googleFlow.email || status.googleFlow.name || status.googleFlow.source || "connected"}`
-              : "Google Flow: not login"
+              ? `Google Flow: ${status.googleFlow.label || status.googleFlow.name || status.googleFlow.source || "connected"}${status.googleFlow.email ? ` (${status.googleFlow.email}${typeof status.googleFlow.credits === "number" ? ` · ${status.googleFlow.credits} credits` : ""})` : typeof status.googleFlow.credits === "number" ? ` (${status.googleFlow.credits} credits)` : ""}${status.googleFlow.paygateTier ? ` · ${status.googleFlow.paygateTier}` : ""}`
+              : typeof status?.googleFlow?.credits === "number"
+                ? `Google Flow: ${status.googleFlow.credits} credits${status.googleFlow.paygateTier ? ` · ${status.googleFlow.paygateTier}` : ""}`
+                : "Google Flow: not login"
           }
         />
         <StatusDot

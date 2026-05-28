@@ -15,7 +15,7 @@ export class GenerationService {
     private readonly db: FlowboardDbService,
   ) {}
 
-  async generate(projectId: string, nodeId: string, provider: 'mock' | 'google-flow' = 'mock') {
+  async generate(projectId: string, nodeId: string, provider: 'mock' | 'google-flow' = 'mock', videoQuality?: '2k' | '4k') {
     const project = this.board.getProject(projectId);
     const node = project.nodes.find((n) => n.id === nodeId);
     if (!node) return { error: 'Node not found' };
@@ -29,7 +29,8 @@ export class GenerationService {
     }
 
     const job = {
-      id: randomUUID(), projectId, nodeId, kind: node.kind, provider,
+      id: randomUUID(), projectId, nodeId, kind: node.kind, provider, videoQuality,
+      projectName: project.name,
       prompt: this.composePrompt(node, upstream),
       upstream: upstream.map((n) => ({ id: n.id, kind: n.kind, title: n.title, data: n.data, output: n.output })),
       context,
@@ -58,7 +59,17 @@ export class GenerationService {
     }
     if (node.kind === 'video') {
       const storyboard = context.storyboard;
-      if (!storyboard?.output?.frames?.length) return 'Video requires storyboard frames';
+      const hasFrames = !!storyboard?.output?.frames?.length;
+      const hasStoryboardMedia = !!(
+        storyboard?.output?.mediaUrls?.length ||
+        storyboard?.output?.mediaIds?.length ||
+        storyboard?.output?.mediaId ||
+        storyboard?.output?.posterMediaId ||
+        storyboard?.output?.mediaUrl ||
+        storyboard?.output?.posterUrl ||
+        storyboard?.output?.reference
+      );
+      if (!hasFrames && !hasStoryboardMedia) return 'Video requires storyboard output';
     }
     return null;
   }
@@ -142,7 +153,20 @@ export class GenerationService {
   }
 
   private async mockVideoOutput(prompt: string, context: ReturnType<GenerationService['buildContext']>, jobId: string) {
-    const storyboardFrames = context.storyboard?.output?.frames || [];
+    const storyboardOutput = context.storyboard?.output || {};
+    const storyboardFrames = Array.isArray(storyboardOutput.frames) && storyboardOutput.frames.length
+      ? storyboardOutput.frames
+      : Array.isArray(storyboardOutput.mediaUrls) && storyboardOutput.mediaUrls.length
+        ? storyboardOutput.mediaUrls.slice(0, 4).map((src: string, index: number) => ({
+            title: `Shot ${index + 1}`,
+            prompt: src,
+          }))
+        : Array.isArray(storyboardOutput.mediaIds) && storyboardOutput.mediaIds.length
+          ? storyboardOutput.mediaIds.slice(0, 4).map((id: string, index: number) => ({
+              title: `Shot ${index + 1}`,
+              prompt: id,
+            }))
+          : [];
     const svg = this.buildVideoPosterSvg(context, prompt);
     const stored = await this.svgToMedia(svg, `${jobId}-video-poster.svg`);
     return {

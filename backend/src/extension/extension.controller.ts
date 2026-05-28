@@ -48,7 +48,12 @@ export class ExtensionCallbackController {
   private async normalizeOutput(output: any, filenameBase: string) {
     if (!output || typeof output !== 'object') return output;
 
-    if (typeof output.mediaId === 'string') return output;
+    const mediaIds = Array.isArray(output.mediaIds)
+      ? output.mediaIds.filter((item: unknown) => typeof item === 'string' && item)
+      : [];
+    const mediaUrls = Array.isArray(output.mediaUrls)
+      ? output.mediaUrls.filter((item: unknown) => typeof item === 'string' && item)
+      : [];
 
     const directReference =
       typeof output.reference === 'string'
@@ -58,6 +63,62 @@ export class ExtensionCallbackController {
           : typeof output.videoUrl === 'string'
             ? output.videoUrl
             : '';
+
+    const previewReference =
+      directReference ||
+      (typeof output.mediaUrl === 'string' ? output.mediaUrl : '') ||
+      (typeof output.posterUrl === 'string' ? output.posterUrl : '') ||
+      (typeof output.mediaUrls?.[0] === 'string' ? output.mediaUrls[0] : '');
+
+    if (mediaUrls.length > 0 && !output.mediaUrl && !output.videoUrl && !output.posterUrl) {
+      const storedUrls: string[] = [];
+      for (let i = 0; i < mediaUrls.length; i += 1) {
+        const src = mediaUrls[i];
+        const stored = src.startsWith('data:')
+          ? await this.media.storeFromDataUrl(src, `${filenameBase}-${i}.bin`)
+          : await this.media.storeFromUrl(src, `${filenameBase}-${i}.bin`);
+        if (stored?.url) storedUrls.push(stored.url);
+      }
+      if (storedUrls.length > 0) {
+        return {
+          ...output,
+          mediaIds: mediaIds.length ? mediaIds : output.mediaIds,
+          mediaUrls: storedUrls,
+          mediaId: output.mediaId || undefined,
+          mediaUrl: storedUrls[0],
+          reference: output.reference || storedUrls[0],
+        };
+      }
+    }
+
+    if (typeof output.mediaId === 'string' && !previewReference) {
+      return {
+        ...output,
+        mediaIds: mediaIds.length ? mediaIds : output.mediaIds,
+        mediaUrls: mediaUrls.length ? mediaUrls : output.mediaUrls,
+      };
+    }
+
+    if (typeof output.mediaId === 'string' && previewReference) {
+      const stored = previewReference.startsWith('data:')
+        ? await this.media.storeFromDataUrl(previewReference, `${filenameBase}.bin`)
+        : await this.media.storeFromUrl(previewReference, `${filenameBase}.bin`);
+
+      if (stored) {
+        return {
+          ...output,
+          mediaIds: mediaIds.length ? mediaIds : output.mediaIds,
+          mediaUrls: mediaUrls.length ? mediaUrls : output.mediaUrls,
+          mediaId: stored.mediaId,
+          mediaUrl: stored.url,
+          posterMediaId: output.posterMediaId || stored.mediaId,
+          posterUrl: output.posterUrl || stored.url,
+          videoUrl: output.videoUrl || stored.url,
+          reference: output.reference || stored.url,
+        };
+      }
+      return output;
+    }
 
     if (!directReference) return output;
 
@@ -69,6 +130,8 @@ export class ExtensionCallbackController {
 
     return {
       ...output,
+      mediaIds: mediaIds.length ? mediaIds : output.mediaIds,
+      mediaUrls: mediaUrls.length ? mediaUrls : output.mediaUrls,
       mediaId: stored.mediaId,
       mediaUrl: stored.url,
       posterMediaId: output.posterMediaId || stored.mediaId,

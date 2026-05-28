@@ -7,12 +7,21 @@
 
 const AGENT_WS_URL = 'ws://127.0.0.1:9223';
 const CALLBACK_URL = 'http://127.0.0.1:8101/api/ext/callback';
+const FLOW_API_BASE = 'https://aisandbox-pa.googleapis.com';
+const FLOW_API_KEY = 'AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY';
+const FLOW_TRPC_CREATE_PROJECT = 'https://labs.google/fx/api/trpc/project.createProject';
+const FLOW_UPLOAD_IMAGE_URL = `${FLOW_API_BASE}/v1/flow/uploadImage`;
+const FLOW_VIDEO_START_URL = `${FLOW_API_BASE}/v1/video:batchAsyncGenerateVideoStartImage`;
+const FLOW_VIDEO_CHECK_URL = `${FLOW_API_BASE}/v1/video:batchCheckAsyncVideoGenerationStatus`;
 
 let ws = null;
 let flowKey = null;
 let callbackSecret = null; // Auth secret received from agent on WS connect
 let state = 'off'; // off | idle | running
 let manualDisconnect = false;
+let flowProjects = {};
+let paygateTier = null;
+let flowCredits = null;
 let metrics = {
   tokenCapturedAt: null,
   requestCount: 0,
@@ -57,10 +66,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 async function init() {
-  const data = await chrome.storage.local.get(['flowKey', 'metrics', 'callbackSecret']);
+  const data = await chrome.storage.local.get(['flowKey', 'metrics', 'callbackSecret', 'flowProjects']);
   if (data.flowKey) flowKey = data.flowKey;
   if (data.metrics) Object.assign(metrics, data.metrics);
   if (data.callbackSecret) callbackSecret = data.callbackSecret;
+  if (data.flowProjects && typeof data.flowProjects === 'object') flowProjects = data.flowProjects;
   connectToAgent();
   chrome.alarms.create('keepAlive', { periodInMinutes: 0.4 });
 }
@@ -92,6 +102,7 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
     // /v1/credits refresh loop (one credits GET per poll). The agent
     // side has a defensive dedupe too, but quiet at the source first.
     if (tokenChanged) {
+      resetFlowBillingState();
       console.log('[Flowboard] Bearer token captured');
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'token_captured', flowKey }));
@@ -109,6 +120,12 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
 );
 
 let cachedUserInfo = null;
+let lastBillingFetchAt = 0;
+
+function resetFlowBillingState() {
+  flowCredits = null;
+  paygateTier = null;
+}
 
 function sendFlowUserStatus(userInfo, loggedIn) {
   const payload = {
@@ -122,6 +139,8 @@ function sendFlowUserStatus(userInfo, loggedIn) {
       accountId: userInfo?.id || userInfo?.sub || undefined,
       updatedAt: new Date().toISOString(),
     },
+    credits: flowCredits,
+    paygateTier,
     extensionPackage: {
       name: 'flowboard-bridge',
       version: '0.0.5',
@@ -154,6 +173,7 @@ async function fetchAndPushUserInfo(token) {
       ws.send(JSON.stringify({ type: 'user_info', userInfo: info }));
     }
     sendFlowUserStatus(info, true);
+    void fetchPaygateTier();
   } catch (e) {
     console.warn('[Flowboard] userinfo fetch failed:', e?.message || e);
   }
@@ -204,6 +224,10 @@ function connectToAgent() {
       // webRequest sniffer can capture the next Bearer header.
       captureTokenFromFlowTab();
     }
+
+    if (flowKey) {
+      void refreshPaygateTierIfStale(true);
+    }
   };
 
   ws.onmessage = async ({ data }) => {
@@ -225,6 +249,7 @@ function connectToAgent() {
         console.log('[Flowboard] logout requested by agent');
         cachedUserInfo = null;
         flowKey = null;
+        resetFlowBillingState();
         sendFlowUserStatus(null, false);
       } else if (msg.type === 'please_resend_userinfo') {
         // Agent's /api/auth/scan asks us to re-fetch userinfo when
@@ -282,6 +307,7 @@ function scheduleReconnect() {
 function keepAlive() {
   if (ws?.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'ping' }));
+    void refreshPaygateTierIfStale(false);
   } else {
     connectToAgent();
   }
@@ -476,6 +502,537 @@ async function captureTokenFromFlowTab() {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function readResponseBody(response) {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+async function flowApiRequest(url, { method = 'POST', headers = {}, body = undefined, captchaAction = null } = {}) {
+  if (!flowKey) return { error: 'NO_FLOW_KEY' };
+
+  const fetchHeaders = {
+    ...(headers || {}),
+    authorization: `Bearer ${flowKey}`,
+    origin: 'https://labs.google',
+    referer: 'https://labs.google/',
+  };
+
+  if (captchaAction) {
+    const captchaResult = await solveCaptcha(`flow-${Date.now()}`, captchaAction);
+    if (!captchaResult?.token) {
+      return { error: captchaResult?.error || 'CAPTCHA_FAILED' };
+    }
+    if (body && typeof body === 'object') {
+      const cloned = JSON.parse(JSON.stringify(body));
+      if (cloned.clientContext?.recaptchaContext) cloned.clientContext.recaptchaContext.token = captchaResult.token;
+      if (Array.isArray(cloned.requests)) {
+        for (const req of cloned.requests) {
+          if (req?.clientContext?.recaptchaContext) req.clientContext.recaptchaContext.token = captchaResult.token;
+        }
+      }
+      body = cloned;
+    }
+  }
+
+  const response = await fetch(url, {
+    method,
+    headers: fetchHeaders,
+    credentials: 'include',
+    body: method === 'GET' ? undefined : JSON.stringify(body),
+  });
+
+  return {
+    status: response.status,
+    data: await readResponseBody(response),
+  };
+}
+
+async function flowTrpcRequest(url, { method = 'POST', headers = {}, body = undefined } = {}) {
+  if (!flowKey) return { error: 'NO_FLOW_KEY' };
+
+  const response = await fetch(url, {
+    method,
+    headers: {
+      ...(headers || {}),
+      authorization: `Bearer ${flowKey}`,
+    },
+    credentials: 'include',
+    body: method === 'GET' ? undefined : JSON.stringify(body),
+  });
+
+  return {
+    status: response.status,
+    data: await readResponseBody(response),
+  };
+}
+
+function extractTrpcProjectId(resp) {
+  return resp?.data?.result?.data?.json?.result?.projectId || null;
+}
+
+function extractOperationNames(resp) {
+  const data = resp?.data;
+  if (!data || typeof data !== 'object') return [];
+  const out = [];
+  const operations = Array.isArray(data.operations) ? data.operations : [];
+  for (const op of operations) {
+    const name = op?.operation?.name || op?.name;
+    if (typeof name === 'string' && name) out.push(name);
+  }
+  if (out.length) return out;
+
+  const workflows = Array.isArray(data.workflows) ? data.workflows : [];
+  for (const wf of workflows) {
+    if (typeof wf?.name === 'string' && wf.name) out.push(wf.name);
+  }
+  return out;
+}
+
+function extractVideoWorkflows(resp) {
+  const data = resp?.data;
+  if (!data || typeof data !== 'object' || !Array.isArray(data.workflows)) return [];
+  return data.workflows
+    .map((wf) => ({
+      name: typeof wf?.name === 'string' ? wf.name : '',
+      primary_media_id: wf?.metadata?.primaryMediaId,
+    }))
+    .filter((wf) => wf.name && typeof wf.primary_media_id === 'string' && wf.primary_media_id);
+}
+
+function extractVideoOperations(resp, requested) {
+  const byName = {};
+  const data = resp?.data;
+  const ops = data && typeof data === 'object' && Array.isArray(data.operations) ? data.operations : [];
+  for (const op of ops) {
+    const inner = op?.operation && typeof op.operation === 'object' ? op.operation : op;
+    const name = typeof inner?.name === 'string' ? inner.name : null;
+    if (!name) continue;
+
+    const meta = inner?.metadata && typeof inner.metadata === 'object' ? inner.metadata : {};
+    const videoMeta = meta.video && typeof meta.video === 'object' ? meta.video : {};
+    let mediaId = typeof videoMeta.mediaId === 'string' ? videoMeta.mediaId : null;
+    const fifeUrl = typeof videoMeta.fifeUrl === 'string' ? videoMeta.fifeUrl : null;
+    if (!mediaId && typeof fifeUrl === 'string') {
+      const match = /\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i.exec(fifeUrl);
+      if (match) mediaId = match[1];
+    }
+
+    const status = typeof op?.status === 'string' ? op.status : null;
+    const innerErr = inner?.error && typeof inner.error === 'object' ? inner.error : null;
+    const errMessage = innerErr ? (innerErr.message || innerErr.status || 'operation_failed') : null;
+    const done = status === 'MEDIA_GENERATION_STATUS_SUCCESSFUL' || status === 'MEDIA_GENERATION_STATUS_FAILED' || Boolean(inner?.done) || Boolean(mediaId && fifeUrl);
+    const mediaEntries = [];
+    if (done && !errMessage && mediaId) {
+      mediaEntries.push({ media_id: mediaId, url: fifeUrl, mediaType: 'video' });
+    }
+
+    byName[name] = {
+      name,
+      done,
+      media_entries: mediaEntries,
+      status,
+      error: errMessage || (status === 'MEDIA_GENERATION_STATUS_FAILED' ? 'MEDIA_GENERATION_STATUS_FAILED' : null),
+    };
+  }
+
+  return requested.map((name) => byName[name] || { name, done: false, media_entries: [] });
+}
+
+async function fetchPaygateTier() {
+  if (!flowKey) return null;
+  lastBillingFetchAt = Date.now();
+  const resp = await fetch(`${FLOW_API_BASE}/v1/credits?key=${FLOW_API_KEY}`, {
+    method: 'GET',
+    headers: {
+      authorization: `Bearer ${flowKey}`,
+      origin: 'https://labs.google',
+      referer: 'https://labs.google/',
+    },
+    credentials: 'include',
+  });
+  if (!resp.ok) return null;
+  const data = await resp.json().catch(() => null);
+  const tier = data?.userPaygateTier;
+  const credits = typeof data?.credits === 'number' ? data.credits : null;
+  flowCredits = credits;
+  if (tier === 'PAYGATE_TIER_ONE' || tier === 'PAYGATE_TIER_TWO') {
+    paygateTier = tier;
+    if (cachedUserInfo || flowKey) {
+      sendFlowUserStatus(cachedUserInfo, true);
+    }
+    return tier;
+  }
+  if (cachedUserInfo || flowKey) {
+    sendFlowUserStatus(cachedUserInfo, Boolean(cachedUserInfo));
+  }
+  return null;
+}
+
+async function refreshPaygateTierIfStale(force = false) {
+  if (!flowKey) return null;
+  if (!force && Date.now() - lastBillingFetchAt < 5 * 60 * 1000) return paygateTier;
+  return fetchPaygateTier();
+}
+
+async function ensureFlowProject(localProjectId, localProjectName) {
+  if (flowProjects[localProjectId]) return flowProjects[localProjectId];
+
+  const title = (typeof localProjectName === 'string' && localProjectName.trim())
+    ? localProjectName.trim()
+    : `Flowboard ${localProjectId}`;
+  const resp = await flowTrpcRequest(FLOW_TRPC_CREATE_PROJECT, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: '*/*',
+    },
+    body: {
+      json: {
+        projectTitle: title,
+        toolName: 'PINHOLE',
+      },
+    },
+  });
+
+  const projectId = extractTrpcProjectId(resp);
+  if (!projectId) return null;
+
+  flowProjects[localProjectId] = projectId;
+  chrome.storage.local.set({ flowProjects });
+  return projectId;
+}
+
+async function uploadLocalMediaToFlow(projectId, sourceUrl, fileName) {
+  const response = await fetch(sourceUrl, { credentials: 'include' });
+  if (!response.ok) {
+    return { error: `SOURCE_MEDIA_FETCH_${response.status}` };
+  }
+
+  const mime = response.headers.get('content-type') || 'application/octet-stream';
+  const buffer = await response.arrayBuffer();
+  const upload = await flowApiRequest(FLOW_UPLOAD_IMAGE_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'text/plain;charset=UTF-8',
+      accept: '*/*',
+      origin: 'https://labs.google',
+      referer: 'https://labs.google/',
+    },
+    body: {
+      clientContext: {
+        projectId: String(projectId),
+        tool: 'PINHOLE',
+      },
+      fileName,
+      imageBytes: arrayBufferToBase64(buffer),
+      isHidden: false,
+      isUserUploaded: true,
+      mimeType: mime,
+    },
+  });
+
+  const mediaId = upload?.data?.media?.name;
+  if (typeof mediaId !== 'string' || !mediaId) {
+    return { error: 'NO_MEDIA_ID_IN_UPLOAD_RESPONSE', raw: upload };
+  }
+
+  return { mediaId, raw: upload };
+}
+
+function pickVideoSource(job) {
+  const upstream = Array.isArray(job?.upstream) ? job.upstream : [];
+  const candidates = upstream.filter((item) => item && (item.kind === 'storyboard' || item.kind === 'image'));
+  for (const item of candidates) {
+    const mediaId = item?.output?.mediaId || item?.output?.posterMediaId || item?.output?.mediaIds?.[0] || item?.data?.mediaId;
+    if (typeof mediaId !== 'string' || !mediaId) continue;
+    const mediaUrl = item?.output?.mediaUrl || item?.output?.videoUrl || item?.output?.reference || item?.data?.reference || `http://127.0.0.1:8101/media/${mediaId}`;
+    return { mediaId, mediaUrl, title: item?.title || item?.kind || 'source' };
+  }
+  return null;
+}
+
+function resolveVideoModelKey(quality, tier) {
+  const isFourK = quality === '4k';
+  if (tier === 'PAYGATE_TIER_TWO') {
+    return isFourK ? 'veo_3_1_i2v_s' : 'veo_3_1_i2v_s_fast_ultra';
+  }
+  return isFourK ? 'veo_3_1_i2v_s' : 'veo_3_1_i2v_s_fast';
+}
+
+function collectStoryboardRefs(job) {
+  const upstream = Array.isArray(job?.upstream) ? job.upstream : [];
+  const refs = [];
+  for (const item of upstream) {
+    if (!item || !['character', 'scene', 'image'].includes(item.kind)) continue;
+    const mediaId = item?.output?.mediaId || item?.output?.posterMediaId || item?.output?.mediaIds?.[0] || item?.data?.mediaId;
+    if (typeof mediaId !== 'string' || !mediaId) continue;
+    const mediaUrl = item?.output?.mediaUrl || item?.output?.reference || item?.data?.reference || `http://127.0.0.1:8101/media/${mediaId}`;
+    refs.push({ mediaId, mediaUrl, title: item?.title || item?.kind || 'source' });
+  }
+  return refs;
+}
+
+async function generateStoryboardWithGoogleFlow(job) {
+  const refs = collectStoryboardRefs(job);
+  if (refs.length < 2) {
+    return { error: 'MISSING_REQUIRED_INPUTS' };
+  }
+
+  const remoteProjectId = await ensureFlowProject(job.projectId, job.projectName);
+  if (!remoteProjectId) {
+    return { error: 'FLOW_PROJECT_CREATE_FAILED' };
+  }
+
+  const uploadedRefs = [];
+  for (const ref of refs.slice(0, 2)) {
+    const uploaded = await uploadLocalMediaToFlow(remoteProjectId, ref.mediaUrl, `${job.id}-${ref.title}.png`);
+    if (uploaded?.error) {
+      return { error: uploaded.error, raw: uploaded.raw || null };
+    }
+    uploadedRefs.push(uploaded.mediaId);
+  }
+
+  const tier = paygateTier || (await fetchPaygateTier()) || 'PAYGATE_TIER_ONE';
+  const prompt = job.prompt || '';
+  const startResponse = await flowApiRequest(`${FLOW_API_BASE}/v1/projects/${remoteProjectId}/flowMedia:batchGenerateImages`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'text/plain;charset=UTF-8',
+      accept: '*/*',
+      origin: 'https://labs.google',
+      referer: 'https://labs.google/',
+    },
+    captchaAction: 'IMAGE_GENERATION',
+    body: {
+      clientContext: {
+        projectId: String(remoteProjectId),
+        recaptchaContext: { applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB', token: '' },
+        sessionId: `;${Date.now()}`,
+        tool: 'PINHOLE',
+        userPaygateTier: tier,
+      },
+      mediaGenerationContext: { batchId: crypto.randomUUID() },
+      useNewMedia: true,
+      requests: [
+        {
+          clientContext: {
+            projectId: String(remoteProjectId),
+            recaptchaContext: { applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB', token: '' },
+            sessionId: `;${Date.now()}`,
+            tool: 'PINHOLE',
+            userPaygateTier: tier,
+          },
+          seed: Date.now() % 1000000,
+          structuredPrompt: { parts: [{ text: `${prompt}\nStoryboard variant 1` }] },
+          imageAspectRatio: 'IMAGE_ASPECT_RATIO_LANDSCAPE',
+          imageModelName: 'GEM_PIX_2',
+          imageInputs: uploadedRefs.map((mediaId) => ({ name: mediaId, imageInputType: 'IMAGE_INPUT_TYPE_REFERENCE' })),
+        },
+        {
+          clientContext: {
+            projectId: String(remoteProjectId),
+            recaptchaContext: { applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB', token: '' },
+            sessionId: `;${Date.now() + 1}`,
+            tool: 'PINHOLE',
+            userPaygateTier: tier,
+          },
+          seed: (Date.now() + 1) % 1000000,
+          structuredPrompt: { parts: [{ text: `${prompt}\nStoryboard variant 2` }] },
+          imageAspectRatio: 'IMAGE_ASPECT_RATIO_LANDSCAPE',
+          imageModelName: 'GEM_PIX_2',
+          imageInputs: uploadedRefs.map((mediaId) => ({ name: mediaId, imageInputType: 'IMAGE_INPUT_TYPE_REFERENCE' })),
+        },
+      ],
+    },
+  });
+
+  if (startResponse?.error) {
+    return { error: startResponse.error, raw: startResponse };
+  }
+
+  const mediaEntries = Array.isArray(startResponse?.data?.media) ? startResponse.data.media : [];
+  const images = mediaEntries
+    .map((entry) => {
+      const mediaId = typeof entry?.name === 'string' ? entry.name : null;
+      const imageUrl = entry?.image?.generatedImage?.fifeUrl || null;
+      return mediaId ? { mediaId, imageUrl } : null;
+    })
+    .filter(Boolean);
+
+  if (!images.length) {
+    return { error: 'NO_MEDIA_RETURNED', raw: startResponse };
+  }
+
+  const mediaIds = images.map((item) => item.mediaId);
+  const mediaUrls = images.map((item) => item.imageUrl).filter(Boolean);
+  return {
+    description: 'Storyboard đã được tạo bằng Google Flow.',
+    prompt,
+    mediaIds,
+    mediaUrls,
+    mediaId: mediaIds[0],
+    mediaUrl: mediaUrls[0] || `http://127.0.0.1:8101/media/${mediaIds[0]}`,
+    reference: mediaUrls[0] || `http://127.0.0.1:8101/media/${mediaIds[0]}`,
+  };
+}
+
+async function generateVideoWithGoogleFlow(job) {
+  const source = pickVideoSource(job);
+  if (!source) {
+    return { error: 'MISSING_STORYBOARD_SOURCE' };
+  }
+
+  const remoteProjectId = await ensureFlowProject(job.projectId, job.projectName);
+  if (!remoteProjectId) {
+    return { error: 'FLOW_PROJECT_CREATE_FAILED' };
+  }
+
+  const uploaded = await uploadLocalMediaToFlow(remoteProjectId, source.mediaUrl, `${job.id}-${job.nodeId}.svg`);
+  if (uploaded?.error) {
+    return { error: uploaded.error, raw: uploaded.raw || null };
+  }
+
+  const tier = paygateTier || (await fetchPaygateTier()) || 'PAYGATE_TIER_ONE';
+  const aspectRatio = 'VIDEO_ASPECT_RATIO_LANDSCAPE';
+  const modelKey = resolveVideoModelKey(job.videoQuality || '2k', tier);
+  const prompt = job.prompt || '';
+  const startResponse = await flowApiRequest(FLOW_VIDEO_START_URL, {
+    method: 'POST',
+    headers: {
+      'content-type': 'text/plain;charset=UTF-8',
+      accept: '*/*',
+      origin: 'https://labs.google',
+      referer: 'https://labs.google/',
+    },
+    captchaAction: 'VIDEO_GENERATION',
+    body: {
+      clientContext: {
+        projectId: String(remoteProjectId),
+        recaptchaContext: { applicationType: 'RECAPTCHA_APPLICATION_TYPE_WEB', token: '' },
+        sessionId: `;${Date.now()}`,
+        tool: 'PINHOLE',
+        userPaygateTier: tier,
+      },
+      mediaGenerationContext: { batchId: crypto.randomUUID() },
+      requests: [
+        {
+          aspectRatio,
+          seed: Date.now() % 1000000,
+          textInput: { structuredPrompt: { parts: [{ text: prompt }] } },
+          videoModelKey: modelKey,
+          startImage: { mediaId: uploaded.mediaId },
+          metadata: { sceneId: crypto.randomUUID() },
+        },
+      ],
+      useV2ModelConfig: true,
+    },
+  });
+
+  if (startResponse?.error) {
+    return { error: startResponse.error, raw: startResponse };
+  }
+
+  const operationNames = extractOperationNames(startResponse);
+  const workflows = extractVideoWorkflows(startResponse);
+  if (!operationNames.length) {
+    return { error: 'NO_OPERATIONS_RETURNED', raw: startResponse };
+  }
+
+  const doneByName = Object.fromEntries(operationNames.map((name) => [name, false]));
+  const entryByName = {};
+  const opErrors = {};
+  const maxCycles = 30;
+
+  for (let i = 0; i < maxCycles && !Object.values(doneByName).every(Boolean); i++) {
+    await sleep(10000);
+
+    const pollOps = operationNames.filter((name) => !workflows.find((wf) => wf.name === name));
+    const pollResult = pollOps.length
+      ? await flowApiRequest(FLOW_VIDEO_CHECK_URL, {
+          method: 'POST',
+          headers: {
+            'content-type': 'text/plain;charset=UTF-8',
+            accept: '*/*',
+            origin: 'https://labs.google',
+            referer: 'https://labs.google/',
+          },
+          body: {
+            operations: pollOps.map((name) => ({ operation: { name } })),
+          },
+        })
+      : { data: {} };
+
+    if (pollResult?.error) continue;
+
+    const polled = extractVideoOperations(pollResult, pollOps);
+    for (const op of polled) {
+      if (!op || typeof op.name !== 'string') continue;
+      if (op.done) {
+        doneByName[op.name] = true;
+        if (Array.isArray(op.media_entries) && op.media_entries.length) {
+          entryByName[op.name] = op.media_entries[0];
+        }
+        if (op.error) opErrors[op.name] = op.error;
+      }
+    }
+
+    for (const wf of workflows) {
+      if (!wf?.name || doneByName[wf.name]) continue;
+      const mediaResp = await flowApiRequest(`${FLOW_API_BASE}/v1/media/${wf.primary_media_id}?clientContext.tool=PINHOLE`, {
+        method: 'GET',
+        headers: {
+          accept: '*/*',
+          origin: 'https://labs.google',
+          referer: 'https://labs.google/',
+        },
+      });
+      if (mediaResp?.error) continue;
+
+      const videoBlock = mediaResp?.data?.video || {};
+      const encoded = typeof videoBlock.encodedVideo === 'string' ? videoBlock.encodedVideo : null;
+      const fifeUrl = typeof videoBlock.fifeUrl === 'string' ? videoBlock.fifeUrl : (typeof mediaResp?.data?.fifeUrl === 'string' ? mediaResp.data.fifeUrl : null);
+      if (!encoded) continue;
+      const bytes = Uint8Array.from(atob(encoded), (ch) => ch.charCodeAt(0));
+      const isMp4 = bytes.length >= 12 && bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70;
+      if (!isMp4) continue;
+      doneByName[wf.name] = true;
+      entryByName[wf.name] = {
+        media_id: wf.primary_media_id,
+        url: fifeUrl || `data:video/mp4;base64,${encoded}`,
+        mediaType: 'video',
+      };
+    }
+  }
+
+  const firstName = operationNames[0];
+  const entry = firstName ? entryByName[firstName] : null;
+  if (!entry || !entry.url) {
+    const err = Object.values(opErrors)[0] || 'timeout_waiting_video';
+    return { error: err, raw: { startResponse, opErrors } };
+  }
+
+  return {
+    description: 'Video đã được sinh bằng Google Flow.',
+    prompt,
+    videoUrl: entry.url,
+    reference: entry.url,
+  };
 }
 
 async function requestCaptchaFromTab(tabId, requestId, pageAction) {
@@ -686,7 +1243,20 @@ function buildStoryboardOutput(job) {
 
 function buildVideoOutput(job) {
   const storyboard = summarizeInput(job, 'storyboard');
-  const frames = storyboard?.output?.frames || job?.context?.storyboard?.output?.frames || [];
+  const storyboardOutput = storyboard?.output || job?.context?.storyboard?.output || {};
+  const frames = (Array.isArray(storyboardOutput.frames) && storyboardOutput.frames.length)
+    ? storyboardOutput.frames
+    : Array.isArray(storyboardOutput.mediaUrls) && storyboardOutput.mediaUrls.length
+      ? storyboardOutput.mediaUrls.slice(0, 4).map((src, index) => ({
+          title: `Shot ${index + 1}`,
+          prompt: src,
+        }))
+      : Array.isArray(storyboardOutput.mediaIds) && storyboardOutput.mediaIds.length
+        ? storyboardOutput.mediaIds.slice(0, 4).map((id, index) => ({
+            title: `Shot ${index + 1}`,
+            prompt: id,
+          }))
+        : [];
   if (!frames.length) {
     return { error: 'MISSING_STORYBOARD_FRAMES' };
   }
@@ -708,7 +1278,11 @@ async function handleGenerateJob(job) {
 
   try {
     let result;
-    if (job.kind === 'storyboard') {
+    if (job.provider === 'google-flow' && job.kind === 'storyboard') {
+      result = await generateStoryboardWithGoogleFlow(job);
+    } else if (job.provider === 'google-flow' && job.kind === 'video') {
+      result = await generateVideoWithGoogleFlow(job);
+    } else if (job.kind === 'storyboard') {
       result = buildStoryboardOutput(job);
     } else if (job.kind === 'video') {
       result = buildVideoOutput(job);

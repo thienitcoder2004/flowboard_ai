@@ -10,7 +10,10 @@ type Props = {
   draftPrompt: string;
   onDraftPromptChange: (value: string) => void;
   onSavePrompt: (nodeId?: string, prompt?: string) => void | Promise<unknown>;
-  onGenerateGoogleFlow: (nodeId?: string) => void | Promise<void>;
+  onGenerateWithQuality: (nodeId?: string, videoQuality?: "2k" | "4k") => void | Promise<void>;
+  onOpenStoryboardPreview: (nodeId: string) => void | Promise<void>;
+  onDownloadSelectedVideo: () => void | Promise<void>;
+  onPatchNodeData: (nodeId: string, data: Record<string, unknown>) => void | Promise<unknown>;
   onDeleteSelection: () => void | Promise<void>;
 };
 
@@ -20,7 +23,10 @@ export default function FlowboardInspector({
   draftPrompt,
   onDraftPromptChange,
   onSavePrompt,
-  onGenerateGoogleFlow,
+  onGenerateWithQuality,
+  onOpenStoryboardPreview,
+  onDownloadSelectedVideo,
+  onPatchNodeData,
   onDeleteSelection,
 }: Props) {
   const [now, setNow] = useState(() => Date.now());
@@ -48,6 +54,17 @@ export default function FlowboardInspector({
       : "";
   const mediaId = selectedData?.mediaId || selectedData?.data?.mediaId || "";
   const posterMediaId = selectedData?.posterMediaId || selectedData?.data?.posterMediaId || "";
+  const primaryMediaId = mediaId || posterMediaId || selectedData?.mediaIds?.[0] || selectedData?.data?.mediaIds?.[0] || "";
+  const mediaIds = selectedData?.mediaIds || selectedData?.data?.mediaIds || [];
+  const mediaUrls = selectedData?.mediaUrls || selectedData?.data?.mediaUrls || [];
+  const storyboardShots = (mediaUrls.length > 0 ? mediaUrls : mediaIds.map((id) => mediaUrl(id))).filter(Boolean).slice(0, 2);
+  const [videoQuality, setVideoQuality] = useState<"2k" | "4k">(
+    (selectedData?.videoQuality ?? selectedData?.data?.videoQuality ?? "2k") as "2k" | "4k",
+  );
+
+  useEffect(() => {
+    setVideoQuality((selectedData?.videoQuality ?? selectedData?.data?.videoQuality ?? "2k") as "2k" | "4k");
+  }, [selectedNode?.id, selectedData?.videoQuality, selectedData?.data?.videoQuality]);
 
   return (
     <aside className="inspector">
@@ -81,7 +98,7 @@ export default function FlowboardInspector({
             <button onClick={() => void onSavePrompt(selectedNode?.id)}>
               Save prompt
             </button>
-            <button onClick={() => void onGenerateGoogleFlow(selectedNode?.id)}>
+            <button onClick={() => void onGenerateWithQuality(selectedNode?.id, videoQuality)}>
               <Cable size={15} /> Send Google Flow
             </button>
             <button className="danger" onClick={() => void onDeleteSelection()}>
@@ -89,15 +106,92 @@ export default function FlowboardInspector({
             </button>
           </div>
 
+          {selectedData.kind === "video" ? (
+            <>
+              <label>Video chất lượng</label>
+              <select
+                value={videoQuality}
+                onChange={(event) => {
+                  const next = event.target.value as "2k" | "4k";
+                  setVideoQuality(next);
+                  void onPatchNodeData(selectedNode!.id, {
+                    videoQuality: next,
+                  });
+                }}
+              >
+                <option value="2k">2K</option>
+                <option value="4k">4K</option>
+              </select>
+            </>
+          ) : null}
+
           {waitingLabel ? <div className="empty">{waitingLabel}</div> : null}
 
-          {(mediaId || posterMediaId) ? (
+          {selectedData.kind === "storyboard" ? (
+            <div className="storyboard-inspector-preview">
+              {storyboardShots.map((src, index) => (
+                <button
+                  key={`${src}-${index}`}
+                  type="button"
+                  className="storyboard-inspector-shot-button"
+                  onClick={() => void onOpenStoryboardPreview(selectedNode!.id)}
+                  title="Mở storyboard"
+                >
+                  <img
+                    className="asset-preview storyboard-inspector-shot"
+                    src={src}
+                    alt={`${selectedData.title} ${index + 1}`}
+                  />
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {selectedData.kind === "storyboard" ? (
+            <button type="button" className="secondary-action" onClick={() => void onOpenStoryboardPreview(selectedNode!.id)}>
+              Xem storyboard lớn
+            </button>
+          ) : null}
+
+          {selectedData.kind === "storyboard" ? (
+            <div className="empty">Storyboard đã nhận được {storyboardShots.length} ảnh ghép.</div>
+          ) : null}
+
+          {selectedData.kind === "video" && typeof selectedData.output === "object" && selectedData.output !== null && typeof (selectedData.output as { videoUrl?: unknown }).videoUrl === "string" ? (
             <div className="empty">
-              <img
-                className="asset-preview"
-                src={mediaUrl(mediaId || posterMediaId)}
-                alt={selectedData.title}
+              <video
+                className="asset-preview video-preview"
+                controls
+                src={String((selectedData.output as { videoUrl?: unknown }).videoUrl)}
               />
+              <a href={String((selectedData.output as { videoUrl?: unknown }).videoUrl)} target="_blank" rel="noreferrer">
+                Tải video
+              </a>
+              <button type="button" className="secondary-action" onClick={() => void onDownloadSelectedVideo()}>
+                Tải video về máy
+              </button>
+            </div>
+          ) : selectedData.kind !== "storyboard" && primaryMediaId ? (
+            <div className="empty">
+              {selectedData.kind === "video" ? (
+                <video className="asset-preview video-preview" controls src={mediaUrl(primaryMediaId)} />
+              ) : (
+                <img
+                  className="asset-preview"
+                  src={mediaUrl(primaryMediaId)}
+                  alt={selectedData.title}
+                />
+              )}
+              {selectedData.kind === "video" && typeof selectedData.output === "object" && selectedData.output !== null && typeof (selectedData.output as { videoUrl?: unknown }).videoUrl === "string" ? (
+                <a href={String((selectedData.output as { videoUrl?: unknown }).videoUrl)} target="_blank" rel="noreferrer">
+                  Tải video
+                </a>
+              ) : null}
+              {selectedData.kind === "video" ? (
+                <button type="button" className="secondary-action" onClick={() => void onDownloadSelectedVideo()}>
+                  Tải video về máy
+                </button>
+              ) : null}
             </div>
           ) : null}
 

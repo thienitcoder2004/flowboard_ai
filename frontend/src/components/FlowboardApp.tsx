@@ -40,6 +40,7 @@ export default function FlowboardApp() {
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [draftPrompt, setDraftPrompt] = useState("");
+  const [storyboardPreviewNodeId, setStoryboardPreviewNodeId] = useState<string | null>(null);
   const [uploadingNodeId, setUploadingNodeId] = useState<string | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const selectedNodeIdRef = useRef<string | null>(null);
@@ -62,6 +63,82 @@ export default function FlowboardApp() {
     setSelectedEdge(null);
     setDraftPrompt("");
   }, []);
+
+  const openStoryboardPreview = useCallback((nodeId: string) => {
+    setStoryboardPreviewNodeId(nodeId);
+  }, []);
+
+  const closeStoryboardPreview = useCallback(() => {
+    setStoryboardPreviewNodeId(null);
+  }, []);
+
+  const storyboardPreviewNode = storyboardPreviewNodeId
+    ? nodes.find((node) => node.id === storyboardPreviewNodeId) || null
+    : null;
+
+  const getStoryboardPreviewSources = useCallback((node: FlowNodeType | null) => {
+    if (!node) return [] as string[];
+
+    const data = node.data;
+    const mediaUrls = data.mediaUrls || data.data?.mediaUrls || [];
+    const mediaIds = data.mediaIds || data.data?.mediaIds || [];
+    const direct = mediaUrls.length > 0 ? mediaUrls : mediaIds.map((id) => `${API}/media/${id}`);
+    const output = data.output && typeof data.output === "object" ? (data.output as Record<string, unknown>) : {};
+    const outputUrls = Array.isArray(output.mediaUrls)
+      ? output.mediaUrls.filter((item): item is string => typeof item === "string" && !!item)
+      : [];
+    const outputIds = Array.isArray(output.mediaIds)
+      ? output.mediaIds.filter((item): item is string => typeof item === "string" && !!item)
+      : [];
+
+    const sources = (outputUrls.length > 0 ? outputUrls : outputIds.map((id) => `${API}/media/${id}`)).concat(direct).filter(Boolean);
+    return Array.from(new Set(sources)).slice(0, 4);
+  }, []);
+
+  const downloadUrl = useCallback(async (url: string, filename: string) => {
+    if (!url) return;
+
+    const response = await fetch(url, { credentials: "include" }).catch(() => null);
+    const blob = response?.ok ? await response.blob().catch(() => null) : null;
+    const objectUrl = blob ? URL.createObjectURL(blob) : url;
+
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    link.rel = "noreferrer";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    if (blob) {
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+    }
+  }, []);
+
+  const downloadStoryboardAll = useCallback(async () => {
+    if (!storyboardPreviewNode) return;
+    const sources = getStoryboardPreviewSources(storyboardPreviewNode);
+    for (let i = 0; i < sources.length; i += 1) {
+      // Sequential download keeps browser prompts predictable.
+      await downloadUrl(sources[i], `${storyboardPreviewNode.data.title || "storyboard"}-${i + 1}.png`);
+    }
+  }, [downloadUrl, getStoryboardPreviewSources, storyboardPreviewNode]);
+
+  const downloadSelectedVideo = useCallback(async () => {
+    if (!selectedNode) return;
+    const output = selectedNode.data.output && typeof selectedNode.data.output === "object"
+      ? (selectedNode.data.output as Record<string, unknown>)
+      : {};
+    const videoUrl = typeof output.videoUrl === "string"
+      ? output.videoUrl
+      : typeof selectedNode.data.videoUrl === "string"
+        ? selectedNode.data.videoUrl
+        : typeof selectedNode.data.data?.videoUrl === "string"
+          ? selectedNode.data.data.videoUrl
+          : "";
+    if (!videoUrl) return;
+    await downloadUrl(videoUrl, `${selectedNode.data.title || "video"}.mp4`);
+  }, [downloadUrl, selectedNode]);
 
   const patchNodeData = useCallback(
     async (nodeId: string, data: Record<string, unknown>) => {
@@ -215,13 +292,18 @@ export default function FlowboardApp() {
     async (kind: Kind, position?: { x: number; y: number }) => {
       if (!project) return;
 
+      const nextPosition = position || {
+        x: 260 + (project.nodes.length % 3) * 340,
+        y: 180 + Math.floor(project.nodes.length / 3) * 240,
+      };
+
       const res = await readJson<ProjectNode>(
         await fetch(`${API}/api/projects/${project.id}/nodes`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             kind,
-            position: position || { x: 260, y: 180 },
+            position: nextPosition,
           }),
         }),
       );
@@ -288,7 +370,7 @@ export default function FlowboardApp() {
     async (
       provider: "mock" | "google-flow" = "mock",
       nodeId = selectedNode?.id,
-      options: { saveDraft?: boolean } = {},
+      options: { saveDraft?: boolean; videoQuality?: "2k" | "4k" } = {},
     ) => {
       if (!project || !nodeId) return;
 
@@ -327,6 +409,7 @@ export default function FlowboardApp() {
           projectId: project.id,
           nodeId,
           provider,
+          videoQuality: options.videoQuality,
         }),
       });
 
@@ -409,6 +492,10 @@ export default function FlowboardApp() {
         void generate("mock", detail.nodeId, { saveDraft });
       }
 
+      if (detail.type === "preview-storyboard") {
+        openStoryboardPreview(detail.nodeId);
+      }
+
       if (detail.type === "upload") {
         if (node) {
           setSelectedNode(node);
@@ -427,7 +514,7 @@ export default function FlowboardApp() {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("flowboard-node-action", onAction);
     };
-  }, [deleteSelection, generate, nodes, selectedEdge, selectedNode]);
+    }, [deleteSelection, generate, nodes, openStoryboardPreview, selectedEdge, selectedNode]);
 
   const onConnect = useCallback(
     async (params: Connection) => {
@@ -521,11 +608,53 @@ export default function FlowboardApp() {
           draftPrompt={draftPrompt}
           onDraftPromptChange={setDraftPrompt}
           onSavePrompt={savePrompt}
-          onGenerateGoogleFlow={(nodeId) =>
-            generate("google-flow", nodeId, { saveDraft: true })
-          }
           onDeleteSelection={deleteSelection}
+          onOpenStoryboardPreview={openStoryboardPreview}
+          onDownloadSelectedVideo={downloadSelectedVideo}
+          onPatchNodeData={patchNodeData}
+          onGenerateWithQuality={(nodeId, videoQuality) =>
+            generate("google-flow", nodeId, {
+              saveDraft: true,
+              videoQuality,
+            })
+          }
         />
+
+        {storyboardPreviewNode ? (
+          <div className="storyboard-lightbox" onClick={closeStoryboardPreview}>
+            <div className="storyboard-lightbox-panel" onClick={(event) => event.stopPropagation()}>
+              <div className="storyboard-lightbox-head">
+                <div>
+                  <div className="panel-title">Storyboard Preview</div>
+                  <h3>{storyboardPreviewNode.data.title}</h3>
+                </div>
+                <button type="button" className="storyboard-lightbox-close" onClick={closeStoryboardPreview}>
+                  Đóng
+                </button>
+              </div>
+
+              <button type="button" className="secondary-action" onClick={() => void downloadStoryboardAll()}>
+                Tải tất cả ảnh
+              </button>
+
+              <div className="storyboard-lightbox-grid">
+                {getStoryboardPreviewSources(storyboardPreviewNode).map((src, index) => (
+                  <figure key={`${src}-${index}`} className="storyboard-lightbox-item">
+                    <a href={src} target="_blank" rel="noreferrer" className="storyboard-lightbox-link">
+                      <img src={src} alt={`${storyboardPreviewNode.data.title} ${index + 1}`} />
+                    </a>
+                    <figcaption>
+                      <span>Ảnh {index + 1}</span>
+                      <a href={src} download target="_blank" rel="noreferrer">
+                        Tải ảnh
+                      </a>
+                    </figcaption>
+                  </figure>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </div>
     </ReactFlowProvider>
   );

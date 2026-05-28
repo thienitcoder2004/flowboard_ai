@@ -42,6 +42,9 @@ function clone<T>(value: T): T {
 export class FlowboardDbService {
   private readonly filePath = join(process.cwd(), 'data', 'flowboard-db.json');
   private state: FlowboardDbState;
+  private readonly nodeWidth = 260;
+  private readonly nodeHeight = 168;
+  private readonly nodeGap = 48;
 
   constructor() {
     this.state = this.loadOrCreate();
@@ -78,12 +81,14 @@ export class FlowboardDbService {
     let created: BoardNode | null = null;
     this.write((state) => {
       const project = this.getProjectMutable(state, projectId);
+      const basePosition = payload.position || { x: 240, y: 180 };
+      const position = this.findFreePosition(project.nodes, basePosition);
       const node: BoardNode = {
         id: randomUUID(),
         kind: payload.kind,
         title: payload.title || this.titleFromKind(payload.kind),
         status: 'idle',
-        position: payload.position || { x: 240, y: 180 },
+        position,
         data: this.defaultData(payload.kind),
       };
       project.nodes.push(node);
@@ -280,5 +285,38 @@ export class FlowboardDbService {
     if (kind === 'storyboard') return { layout: '2x2', prompt: '' };
     if (kind === 'video') return { duration: 5, prompt: '' };
     return { prompt: '', reference: '' };
+  }
+
+  private findFreePosition(nodes: BoardNode[], base: { x: number; y: number }) {
+    const stepX = this.nodeWidth + this.nodeGap;
+    const stepY = this.nodeHeight + this.nodeGap;
+    const padding = this.nodeGap / 2;
+
+    for (let row = 0; row < 12; row += 1) {
+      for (let col = 0; col < 8; col += 1) {
+        const x = base.x + col * stepX;
+        const y = base.y + row * stepY;
+        const collides = nodes.some((node) => {
+          const leftA = x;
+          const topA = y;
+          const rightA = x + this.nodeWidth + padding;
+          const bottomA = y + this.nodeHeight + padding;
+
+          const leftB = node.position.x;
+          const topB = node.position.y;
+          const rightB = leftB + this.nodeWidth + padding;
+          const bottomB = topB + this.nodeHeight + padding;
+
+          return leftA < rightB && rightA > leftB && topA < bottomB && bottomA > topB;
+        });
+
+        if (!collides) return { x, y };
+      }
+    }
+
+    return {
+      x: base.x + 8 * stepX,
+      y: base.y + 12 * stepY,
+    };
   }
 }

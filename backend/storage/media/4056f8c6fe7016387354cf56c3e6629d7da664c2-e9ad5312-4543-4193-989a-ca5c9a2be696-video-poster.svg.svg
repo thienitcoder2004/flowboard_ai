@@ -1,0 +1,16 @@
+
+      <svg xmlns="http://www.w3.org/2000/svg" width="720" height="420" viewBox="0 0 720 420">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#dc2626"/>
+            <stop offset="100%" stop-color="#0f172a"/>
+          </linearGradient>
+        </defs>
+        <rect width="720" height="420" rx="28" fill="url(#g)"/>
+        <circle cx="360" cy="210" r="52" fill="rgba(255,255,255,0.15)"/>
+        <polygon points="346,186 346,234 390,210" fill="#fff"/>
+        <text x="40" y="70" fill="#fff" font-size="40" font-family="Inter,Arial,sans-serif" font-weight="700">Video</text>
+        <text x="40" y="116" fill="#e2e8f0" font-size="18" font-family="Inter,Arial,sans-serif">Storyboard: Storyboard đã được tạo bằng Google Flow.
+Video: </text>
+      </svg>
+    

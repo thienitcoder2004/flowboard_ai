@@ -33,6 +33,10 @@ export default function FlowboardNode({ id, data, selected }: FlowNodeProps) {
   const mediaId = nodeData.mediaId || nodeData.data?.mediaId || undefined;
   const posterMediaId = nodeData.posterMediaId || nodeData.data?.posterMediaId || undefined;
   const mediaIds = nodeData.mediaIds || nodeData.data?.mediaIds || [];
+  const mediaUrls = nodeData.mediaUrls || nodeData.data?.mediaUrls || [];
+  const primaryMediaId = mediaId || posterMediaId || mediaIds[0];
+  const hasPreview = Boolean(primaryMediaId || reference || mediaUrls.length > 0);
+  const storyboardPreviewSources = mediaUrls.length > 0 ? mediaUrls : mediaIds.map((item) => mediaUrl(item));
   const outputLabel =
     typeof nodeData.output === "object" &&
     nodeData.output !== null &&
@@ -77,7 +81,7 @@ export default function FlowboardNode({ id, data, selected }: FlowNodeProps) {
 
   return (
     <div
-      className={`flow-node ${selected ? "selected" : ""} ${nodeData.status === "generating" ? "generating" : ""}`}
+      className={`flow-node ${selected ? "selected" : ""} ${nodeData.status === "generating" ? "generating" : ""} ${nodeData.status === "done" ? "done" : ""} ${nodeData.status === "failed" ? "failed" : ""}`}
       style={{ "--node-accent": meta.color } as React.CSSProperties}
     >
       <Handle type="target" position={Position.Left} className="handle" />
@@ -96,19 +100,53 @@ export default function FlowboardNode({ id, data, selected }: FlowNodeProps) {
             <Video size={34} />
             <span>{videoUrl || posterMediaId || mediaId ? "Ready" : "0:00"}</span>
             <button onClick={fire("generate")}>Generate</button>
-            {(posterMediaId || mediaId) ? (
-              <img className="asset-preview video-preview" src={mediaUrl(posterMediaId || mediaId)} alt={nodeData.title} />
+            {(videoUrl || posterMediaId || primaryMediaId) ? (
+              <video
+                className="asset-preview video-preview"
+                controls
+                src={videoUrl || mediaUrl(posterMediaId || primaryMediaId)}
+              />
             ) : null}
-            {(videoUrl || mediaId || posterMediaId) ? (
-              <a href={videoUrl || mediaUrl(mediaId || posterMediaId)} target="_blank" rel="noreferrer">
+            {(videoUrl || primaryMediaId) ? (
+              <a href={videoUrl || mediaUrl(primaryMediaId)} target="_blank" rel="noreferrer" download>
                 Play / Download
+              </a>
+            ) : null}
+            {(videoUrl || primaryMediaId) ? (
+              <a href={videoUrl || mediaUrl(primaryMediaId)} download>
+                Tải video
               </a>
             ) : null}
           </div>
         ) : kind === "storyboard" ? (
           <div className="story-grid">
-            {(mediaId || reference) ? (
-              <img className="asset-preview storyboard-preview" src={mediaUrl(mediaId) || reference} alt={nodeData.title} />
+            {storyboardPreviewSources.length > 1 ? (
+              <div className="story-preview-grid">
+                {storyboardPreviewSources.slice(0, 2).map((src, index) => (
+                  <button
+                    key={`${src}-${index}`}
+                    type="button"
+                    className="storyboard-preview-button"
+                    onClick={fire("preview-storyboard")}
+                    title="Xem storyboard"
+                  >
+                    <img
+                      className="asset-preview storyboard-preview"
+                      src={src}
+                      alt={`${nodeData.title} ${index + 1}`}
+                    />
+                  </button>
+                ))}
+              </div>
+            ) : (primaryMediaId || reference) ? (
+              <button
+                type="button"
+                className="storyboard-preview-button"
+                onClick={fire("preview-storyboard")}
+                title="Xem storyboard"
+              >
+                <img className="asset-preview storyboard-preview" src={mediaUrl(primaryMediaId) || reference} alt={nodeData.title} />
+              </button>
             ) : (
               <>
                 <i />
@@ -117,16 +155,26 @@ export default function FlowboardNode({ id, data, selected }: FlowNodeProps) {
                 <i />
               </>
             )}
-            <span>{(frames || mediaIds.length || 4)} frames</span>
+            <span>{(frames || storyboardPreviewSources.length || mediaIds.length || 4)} frames</span>
             <button onClick={fire("generate")}>Generate</button>
           </div>
         ) : (
-          <div className={`image-box ${mediaId || reference ? "has-preview" : ""}`}>
-            {(mediaId || reference) ? (
-              <img className="asset-preview" src={mediaUrl(mediaId) || reference} alt={nodeData.title} />
+          <div className={`image-box ${hasPreview ? "has-preview" : ""}`}>
+            {hasPreview ? (
+              <img
+                className="asset-preview image-preview-clickable"
+                src={mediaUrl(primaryMediaId) || reference || mediaUrls[0]}
+                alt={nodeData.title}
+                onClick={fire("upload")}
+                title="Click để thay ảnh"
+              />
             ) : null}
-            <button onClick={fire("upload")}>Upload</button>
-            <button onClick={fire("generate")}>Generate</button>
+            {!hasPreview ? (
+              <>
+                <button onClick={fire("upload")}>Upload</button>
+                <button onClick={fire("generate")}>Generate</button>
+              </>
+            ) : null}
           </div>
         )}
       </div>

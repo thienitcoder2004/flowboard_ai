@@ -44,10 +44,6 @@ export const KIND_META: Record<Kind, { label: string; icon: LucideIcon; color: s
 export const TOOLBAR_KINDS: ToolbarItem[] = [
   { kind: "character", label: "Nhân vật", icon: CircleUserRound },
   { kind: "scene", label: "Cảnh", icon: MonitorPlay },
-  { kind: "clothes", label: "Quần áo", icon: Shirt },
-  { kind: "accessory", label: "Phụ kiện", icon: Package },
-  { kind: "action", label: "Hành động", icon: Sparkles },
-  { kind: "style", label: "Phong cách", icon: Palette },
   { kind: "storyboard", label: "Storyboard", icon: Layers },
   { kind: "video", label: "Video", icon: Video },
 ];
@@ -62,14 +58,40 @@ export function toFlowNode(node: ProjectNode): FlowNodeType {
     imageUrl?: unknown;
     mediaId?: unknown;
     mediaIds?: unknown;
+    mediaUrls?: unknown;
     posterMediaId?: unknown;
     storyboardGrid?: unknown;
     durationS?: unknown;
+    videoQuality?: unknown;
     videoUrl?: unknown;
   };
-  const mediaId = typeof output.mediaId === 'string' ? output.mediaId : typeof node.data?.mediaId === 'string' ? node.data.mediaId : undefined;
-  const posterMediaId = typeof output.posterMediaId === 'string' ? output.posterMediaId : typeof node.data?.posterMediaId === 'string' ? node.data.posterMediaId : undefined;
-  const mediaIds = Array.isArray(output.mediaIds) ? (output.mediaIds.filter((item) => typeof item === 'string') as string[]) : node.data?.mediaIds;
+  const mediaId =
+    typeof output.mediaId === 'string'
+      ? output.mediaId
+      : typeof node.mediaId === 'string'
+        ? node.mediaId
+        : typeof node.data?.mediaId === 'string'
+          ? node.data.mediaId
+          : undefined;
+  const posterMediaId =
+    typeof output.posterMediaId === 'string'
+      ? output.posterMediaId
+      : typeof node.posterMediaId === 'string'
+        ? node.posterMediaId
+        : typeof node.data?.posterMediaId === 'string'
+          ? node.data.posterMediaId
+          : undefined;
+  const mediaIds = Array.isArray(output.mediaIds)
+    ? (output.mediaIds.filter((item) => typeof item === 'string') as string[])
+    : Array.isArray(node.mediaIds)
+      ? node.mediaIds
+      : node.data?.mediaIds;
+  const mediaUrls = Array.isArray(output.mediaUrls)
+    ? (output.mediaUrls.filter((item) => typeof item === 'string') as string[])
+    : Array.isArray(node.mediaUrls)
+      ? node.mediaUrls
+      : node.data?.mediaUrls;
+  const primaryMediaId = mediaId || posterMediaId || mediaIds?.[0];
   return {
     id: node.id,
     type: "flowNode",
@@ -82,14 +104,23 @@ export function toFlowNode(node: ProjectNode): FlowNodeType {
       requestState: node.data?.requestState ?? node.requestState,
       waitingSince: node.data?.waitingSince ?? node.waitingSince,
       requestTimeoutMs: node.data?.requestTimeoutMs ?? node.requestTimeoutMs,
-      mediaId,
+      mediaId: primaryMediaId,
       mediaIds,
+      mediaUrls,
       posterMediaId,
       storyboardGrid: typeof output.storyboardGrid === 'string' ? output.storyboardGrid : node.data?.storyboardGrid,
       durationS: typeof output.durationS === 'number' ? output.durationS : node.data?.durationS,
+      videoQuality: typeof node.videoQuality === 'string' ? node.videoQuality as '2k' | '4k' : node.data?.videoQuality,
       prompt: node.data?.prompt ?? node.prompt,
       output: node.data?.output ?? node.output,
-      reference: node.data?.reference ?? node.reference ?? (typeof output.reference === 'string' ? output.reference : typeof output.imageUrl === 'string' ? output.imageUrl : undefined),
+      reference:
+        node.data?.reference ??
+        node.reference ??
+        (typeof output.reference === 'string'
+          ? output.reference
+          : typeof output.imageUrl === 'string'
+            ? output.imageUrl
+            : undefined),
       referenceName: node.data?.referenceName ?? node.referenceName,
       referenceType: node.data?.referenceType ?? node.referenceType,
       uploadedAt: node.data?.uploadedAt ?? node.uploadedAt,

@@ -6,7 +6,7 @@ export class GenerationController {
   constructor(private readonly generation: GenerationService) {}
 
   @Post('run')
-  run(@Body() body: { projectId: string; nodeId: string; provider?: 'mock' | 'google-flow' }) {
-    return this.generation.generate(body.projectId, body.nodeId, body.provider || 'mock');
+  run(@Body() body: { projectId: string; nodeId: string; provider?: 'mock' | 'google-flow'; videoQuality?: '2k' | '4k' }) {
+    return this.generation.generate(body.projectId, body.nodeId, body.provider || 'mock', body.videoQuality);
   }
 }

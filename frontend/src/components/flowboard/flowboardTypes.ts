@@ -24,9 +24,12 @@ export type BoardNodeData = {
   requestTimeoutMs?: number;
   mediaId?: string;
   mediaIds?: string[];
+  mediaUrls?: string[];
   posterMediaId?: string;
   storyboardGrid?: string;
   durationS?: number;
+  videoQuality?: "2k" | "4k";
+  videoUrl?: string;
   prompt?: string;
   output?: unknown;
   reference?: string;
@@ -41,9 +44,12 @@ export type BoardNodeData = {
     requestTimeoutMs?: number;
     mediaId?: string;
     mediaIds?: string[];
+    mediaUrls?: string[];
     posterMediaId?: string;
     storyboardGrid?: string;
     durationS?: number;
+    videoQuality?: "2k" | "4k";
+    videoUrl?: string;
     reference?: string;
     referenceName?: string;
     referenceType?: string;
@@ -71,9 +77,12 @@ export type ProjectNode = {
   requestTimeoutMs?: number;
   mediaId?: string;
   mediaIds?: string[];
+  mediaUrls?: string[];
   posterMediaId?: string;
   storyboardGrid?: string;
   durationS?: number;
+  videoQuality?: "2k" | "4k";
+  videoUrl?: string;
   prompt?: string;
   output?: unknown;
   reference?: string;
@@ -88,9 +97,12 @@ export type ProjectNode = {
     requestTimeoutMs?: number;
     mediaId?: string;
     mediaIds?: string[];
+    mediaUrls?: string[];
     posterMediaId?: string;
     storyboardGrid?: string;
     durationS?: number;
+    videoQuality?: "2k" | "4k";
+    videoUrl?: string;
     reference?: string;
     referenceName?: string;
     referenceType?: string;
@@ -123,6 +135,8 @@ export type AgentStatus = {
     email?: string;
     name?: string;
     source?: string;
+    paygateTier?: string;
+    credits?: number | null;
   };
   backendPackage?: { name: string; version: string };
   extensionPackage?: { name: string; version: string };
@@ -136,7 +150,7 @@ export type MenuState = {
 };
 
 export type FlowboardNodeActionDetail = {
-  type: "select" | "generate" | "upload";
+  type: "select" | "generate" | "upload" | "preview-storyboard";
   nodeId: string;
 };
 
