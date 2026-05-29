@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'crypto';
+import { execFile } from 'child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { BoardService } from '../board/board.service';
 import { BoardNode, NodeKind } from '../board/board.types';
 import { ExtensionService } from '../extension/extension.service';
@@ -19,6 +23,7 @@ export class GenerationService {
     const project = this.board.getProject(projectId);
     const node = project.nodes.find((n) => n.id === nodeId);
     if (!node) return { error: 'Node not found' };
+    const effectiveProvider = node.kind === 'merge' ? 'mock' : provider;
     const upstream = this.board.getUpstreamNodes(projectId, nodeId);
     const context = this.buildContext(node, upstream);
 
@@ -29,18 +34,18 @@ export class GenerationService {
     }
 
     const job = {
-      id: randomUUID(), projectId, nodeId, kind: node.kind, provider, videoQuality,
+      id: randomUUID(), projectId, nodeId, kind: node.kind, provider: effectiveProvider, videoQuality,
       projectName: project.name,
       prompt: this.composePrompt(node, upstream),
       upstream: upstream.map((n) => ({ id: n.id, kind: n.kind, title: n.title, data: n.data, output: n.output })),
       context,
     };
     this.db.recordJob({
-      ...job,
+      ...this.sanitizeJobForStorage(job),
       status: 'running',
     });
     this.board.setNodeStatus(projectId, nodeId, 'generating');
-    if (provider === 'google-flow') {
+    if (effectiveProvider === 'google-flow') {
       const res = this.extension.sendJob(job);
       this.db.updateJob(job.id, { status: 'sent' });
       return { mode: 'extension', job, extension: res };
@@ -88,8 +93,12 @@ export class GenerationService {
       accessory: [],
       action: [],
       style: [],
+      script: [],
+      scriptboard: [],
+      segment: [],
       storyboard: [],
       video: [],
+      merge: [],
       image: [],
       note: [],
     };
@@ -151,13 +160,209 @@ export class GenerationService {
   }
 
   private async mockOutput(node: BoardNode, prompt: string, context: ReturnType<GenerationService['buildContext']>, jobId: string) {
+    if (node.kind === 'scriptboard') {
+      return this.mockScriptboardOutput(node, prompt, context, jobId);
+    }
+    if (node.kind === 'segment') {
+      return this.mockSegmentOutput(node, prompt, context, jobId);
+    }
     if (node.kind === 'storyboard') {
       return this.mockStoryboardOutput(prompt, context, jobId);
     }
     if (node.kind === 'video') {
       return this.mockVideoOutput(prompt, context, jobId);
     }
+    if (node.kind === 'merge') {
+      return this.mockMergeOutput(prompt, context, jobId);
+    }
     return this.mockMediaNodeOutput(node, prompt, jobId);
+  }
+
+  private async mockScriptboardOutput(node: BoardNode, prompt: string, context: ReturnType<GenerationService['buildContext']>, jobId: string) {
+    const scriptNode = context.inputs.script[0];
+    const source = scriptNode?.data?.script || scriptNode?.data?.prompt || node.data?.script || node.data?.prompt || prompt;
+    const parts = String(source || '')
+      .split(/\n{2,}|(?<=\.)\s+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const sceneCount = Number(node.data?.sceneCount || 3);
+    const scenes = Array.from({ length: sceneCount }, (_, index) => {
+      const text = parts[index] || parts[0] || `Phân cảnh ${index + 1}`;
+      return {
+        index: index + 1,
+        title: `Scene ${index + 1}`,
+        prompt: text,
+        duration: 8,
+      };
+    });
+    const stored = await this.media.storeText(JSON.stringify({ prompt, scenes }, null, 2), 'application/json', `${jobId}-scriptboard.json`);
+    return {
+      description: 'Scriptboard đã breakdown thành 3 phân cảnh.',
+      prompt,
+      scenes,
+      mediaId: stored?.mediaId,
+      mediaUrl: stored?.url,
+    };
+  }
+
+  private async mockSegmentOutput(node: BoardNode, prompt: string, context: ReturnType<GenerationService['buildContext']>, jobId: string) {
+    const scriptboard = context.inputs.scriptboard[0]?.output || {};
+    const scenes = Array.isArray(scriptboard.scenes) ? scriptboard.scenes : [];
+    const segmentIndex = Number(node.data?.segmentIndex || 1);
+    const selected = scenes[segmentIndex - 1] || scenes[0] || null;
+    const output = {
+      index: segmentIndex,
+      title: selected?.title || `Scene ${segmentIndex}`,
+      prompt: [selected?.prompt, node.data?.prompt].filter(Boolean).join('\n'),
+      duration: Number(node.data?.duration || selected?.duration || 8),
+    };
+    const stored = await this.media.storeText(JSON.stringify(output, null, 2), 'application/json', `${jobId}-segment.json`);
+    return {
+      description: `Segment ${segmentIndex} đã sẵn sàng.`,
+      ...output,
+      mediaId: stored?.mediaId,
+      mediaUrl: stored?.url,
+    };
+  }
+
+  private async mockMergeOutput(prompt: string, context: ReturnType<GenerationService['buildContext']>, jobId: string) {
+    const videos = context.inputs.video
+      .map((item) => item.output)
+      .filter(Boolean)
+      .map((output, index) => ({
+        index: index + 1,
+        videoUrl: output?.videoUrl || output?.mediaUrl || output?.posterUrl || '',
+        duration: output?.durationS || output?.duration || null,
+      }))
+      .filter((item) => item.videoUrl);
+    const manifest = { prompt, videos, transition: context.node.data?.transition || 'cut' };
+    const stored = await this.media.storeText(JSON.stringify(manifest, null, 2), 'application/json', `${jobId}-merge-manifest.json`);
+
+    if (videos.length >= 2) {
+      const merged = await this.tryMergeVideos(videos.map((item) => item.videoUrl), jobId);
+      if (merged) {
+        return {
+          description: `Đã ghép ${videos.length} video segment bằng FFmpeg.`,
+          prompt,
+          videos,
+          finalVideoUrl: merged.url,
+          mediaId: merged.mediaId,
+          mediaUrl: merged.url,
+          manifestMediaId: stored?.mediaId,
+          manifestUrl: stored?.url,
+        };
+      }
+    }
+
+    return {
+      description: videos.length
+        ? `Chưa ghép được ${videos.length} video segment. Kiểm tra FFmpeg trong PATH và video input.`
+        : 'Merge cần video segment upstream.',
+      prompt,
+      videos,
+      finalVideoUrl: '',
+      error: videos.length >= 2 ? 'FFMPEG_MERGE_FAILED' : 'MERGE_REQUIRES_AT_LEAST_2_VIDEOS',
+      mediaId: stored?.mediaId,
+      mediaUrl: stored?.url,
+    };
+  }
+
+  private async tryMergeVideos(videoUrls: string[], jobId: string) {
+    const tempDir = mkdtempSync(join(tmpdir(), `flowboard-merge-${jobId}-`));
+    try {
+      const inputPaths: string[] = [];
+
+      for (let index = 0; index < videoUrls.length; index += 1) {
+        const localPath = await this.resolveVideoToLocalPath(videoUrls[index], tempDir, index);
+        if (!localPath) return null;
+        inputPaths.push(localPath);
+      }
+
+      const concatFile = join(tempDir, 'inputs.txt');
+      writeFileSync(
+        concatFile,
+        inputPaths.map((path) => `file '${path.replace(/'/g, "'\\''")}'`).join('\n'),
+        'utf8',
+      );
+
+      const outputPath = join(tempDir, `${jobId}-final.mp4`);
+      await this.execFfmpeg([
+        '-y',
+        '-f', 'concat',
+        '-safe', '0',
+        '-i', concatFile,
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac',
+        '-movflags', '+faststart',
+        outputPath,
+      ]);
+
+      if (!existsSync(outputPath)) return null;
+      const buffer = readFileSync(outputPath);
+      return this.media.storeBuffer(buffer, 'video/mp4', `${jobId}-final.mp4`);
+    } catch {
+      return null;
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+
+  private async resolveVideoToLocalPath(videoUrl: string, tempDir: string, index: number) {
+    const mediaId = this.extractLocalMediaId(videoUrl);
+    if (mediaId) {
+      const meta = this.media.getMedia(mediaId);
+      if (meta?.path && existsSync(meta.path)) return meta.path;
+    }
+
+    if (videoUrl.startsWith('data:')) {
+      const stored = await this.media.storeFromDataUrl(videoUrl, `merge-input-${index}.mp4`);
+      if (stored?.path && existsSync(stored.path)) return stored.path;
+    }
+
+    if (!videoUrl.startsWith('http://') && !videoUrl.startsWith('https://')) return null;
+    const response = await fetch(videoUrl);
+    if (!response.ok) return null;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const outPath = join(tempDir, `input-${index}.mp4`);
+    writeFileSync(outPath, buffer);
+    return outPath;
+  }
+
+  private extractLocalMediaId(url: string) {
+    const match = /\/media\/([^/?#]+)/.exec(url || '');
+    return match?.[1] || '';
+  }
+
+  private execFfmpeg(args: string[]) {
+    return new Promise<void>((resolve, reject) => {
+      execFile('ffmpeg', args, (error) => {
+        if (error) reject(error);
+        else resolve();
+      });
+    });
+  }
+
+  private sanitizeJobForStorage(job: any) {
+    return this.sanitizeLargeValues(job);
+  }
+
+  private sanitizeLargeValues<T>(value: T): T {
+    if (typeof value === 'string') {
+      if (value.startsWith('data:')) return '[stored-media-data-url-omitted]' as T;
+      if (value.length > 2000) return `${value.slice(0, 2000)}…[truncated]` as T;
+      return value;
+    }
+    if (Array.isArray(value)) return value.map((item) => this.sanitizeLargeValues(item)) as T;
+    if (value && typeof value === 'object') {
+      const out: Record<string, any> = {};
+      for (const [key, item] of Object.entries(value as Record<string, any>)) {
+        out[key] = this.sanitizeLargeValues(item);
+      }
+      return out as T;
+    }
+    return value;
   }
 
   private async svgToMedia(svg: string, filename: string) {

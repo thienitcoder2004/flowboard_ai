@@ -4,8 +4,11 @@ import {
   Palette,
   ImageIcon,
   Layers,
+  FileText,
+  GitBranch,
   MonitorPlay,
   Package,
+  Route,
   Sparkles,
   Shirt,
   Video,
@@ -36,16 +39,24 @@ export const KIND_META: Record<Kind, { label: string; icon: LucideIcon; color: s
   action: { label: "Hành động", icon: Sparkles, color: "#34d399" },
   style: { label: "Phong cách", icon: Palette, color: "#f97316" },
   image: { label: "Image", icon: ImageIcon, color: "#22c55e" },
+  script: { label: "Script", icon: FileText, color: "#facc15" },
+  scriptboard: { label: "Scriptboard", icon: GitBranch, color: "#38bdf8" },
+  segment: { label: "Segment", icon: Route, color: "#2dd4bf" },
   storyboard: { label: "Storyboard", icon: Layers, color: "#60a5fa" },
   video: { label: "Video", icon: Video, color: "#fb7185" },
+  merge: { label: "Merge", icon: GitBranch, color: "#c084fc" },
   note: { label: "Note", icon: Box, color: "#94a3b8" },
 };
 
 export const TOOLBAR_KINDS: ToolbarItem[] = [
+  { kind: "script", label: "Script", icon: FileText },
+  { kind: "scriptboard", label: "Scriptboard", icon: GitBranch },
+  { kind: "segment", label: "Segment", icon: Route },
   { kind: "character", label: "Nhân vật", icon: CircleUserRound },
   { kind: "scene", label: "Cảnh", icon: MonitorPlay },
   { kind: "storyboard", label: "Storyboard", icon: Layers },
   { kind: "video", label: "Video", icon: Video },
+  { kind: "merge", label: "Merge", icon: GitBranch },
 ];
 
 export async function readJson<T>(response: Response): Promise<T> {

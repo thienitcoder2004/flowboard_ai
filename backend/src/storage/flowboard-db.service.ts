@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { randomUUID } from 'crypto';
 import { BoardEdge, BoardNode, NodeKind, NodeStatus, Project } from '../board/board.types';
@@ -210,8 +210,63 @@ export class FlowboardDbService {
     const result = mutate(this.state);
     this.state.updatedAt = new Date().toISOString();
     this.ensureDir();
-    writeFileSync(this.filePath, JSON.stringify(this.state, null, 2), 'utf8');
+    this.state = this.sanitizeForStorage(this.state);
+    this.writeJsonWithRetry(JSON.stringify(this.state, null, 2));
     return result;
+  }
+
+  private writeJsonWithRetry(json: string) {
+    const tempPath = `${this.filePath}.${process.pid}.${Date.now()}.tmp`;
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        writeFileSync(tempPath, json, 'utf8');
+        renameSync(tempPath, this.filePath);
+        return;
+      } catch (error) {
+        lastError = error;
+        try { if (existsSync(tempPath)) unlinkSync(tempPath); } catch {}
+        this.sleepSync(40 * (attempt + 1));
+      }
+    }
+
+    try {
+      writeFileSync(this.filePath, json, 'utf8');
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+
+    console.warn('[FlowboardDbService] Failed to persist flowboard-db.json:', lastError);
+  }
+
+  private sleepSync(ms: number) {
+    const buffer = new SharedArrayBuffer(4);
+    const view = new Int32Array(buffer);
+    Atomics.wait(view, 0, 0, ms);
+  }
+
+  private sanitizeForStorage<T>(value: T): T {
+    if (typeof value === 'string') {
+      if (value.startsWith('data:')) return '[media-data-url-omitted]' as T;
+      if (value.length > 5000) return `${value.slice(0, 5000)}…[truncated]` as T;
+      return value;
+    }
+
+    if (Array.isArray(value)) {
+      return value.map((item) => this.sanitizeForStorage(item)) as T;
+    }
+
+    if (value && typeof value === 'object') {
+      const out: Record<string, any> = {};
+      for (const [key, item] of Object.entries(value as Record<string, any>)) {
+        out[key] = this.sanitizeForStorage(item);
+      }
+      return out as T;
+    }
+
+    return value;
   }
 
   private loadOrCreate(): FlowboardDbState {
@@ -295,14 +350,18 @@ export class FlowboardDbService {
 
   private titleFromKind(kind: NodeKind) {
     const map: Record<NodeKind, string> = {
-      character: 'Nhân vật', scene: 'Cảnh', clothes: 'Quần áo', accessory: 'Phụ kiện', action: 'Hành động', style: 'Phong cách', image: 'Image', storyboard: 'Storyboard', video: 'Video', note: 'Note',
+      character: 'Nhân vật', scene: 'Cảnh', clothes: 'Quần áo', accessory: 'Phụ kiện', action: 'Hành động', style: 'Phong cách', image: 'Image', script: 'Script', scriptboard: 'Scriptboard', segment: 'Segment', storyboard: 'Storyboard', video: 'Video', merge: 'Merge', note: 'Note',
     };
     return map[kind];
   }
 
   private defaultData(kind: NodeKind) {
+    if (kind === 'script') return { prompt: '', script: '' };
+    if (kind === 'scriptboard') return { prompt: '', sceneCount: 3 };
+    if (kind === 'segment') return { prompt: '', segmentIndex: 1, duration: 8 };
     if (kind === 'storyboard') return { layout: '2x2', prompt: '' };
     if (kind === 'video') return { duration: 8, prompt: '' };
+    if (kind === 'merge') return { prompt: '', transition: 'cut' };
     return { prompt: '', reference: '' };
   }
 

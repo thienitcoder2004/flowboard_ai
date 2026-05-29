@@ -669,7 +669,13 @@ async function fetchPaygateTier() {
   if (!resp.ok) return null;
   const data = await resp.json().catch(() => null);
   const tier = data?.userPaygateTier;
-  const credits = typeof data?.credits === 'number' ? data.credits : null;
+
+  const credits = typeof data?.subscriptionCredits === 'number'
+    ? data.subscriptionCredits
+    : typeof data?.credits === 'number'
+      ? data.credits
+      : null;
+
   flowCredits = credits;
   if (tier === 'PAYGATE_TIER_ONE' || tier === 'PAYGATE_TIER_TWO') {
     paygateTier = tier;

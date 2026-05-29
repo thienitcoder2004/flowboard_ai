@@ -8,8 +8,12 @@ export type Kind =
   | "action"
   | "style"
   | "image"
+  | "script"
+  | "scriptboard"
+  | "segment"
   | "storyboard"
   | "video"
+  | "merge"
   | "note";
 
 export type ToolbarKind = Exclude<Kind, "image" | "note">;

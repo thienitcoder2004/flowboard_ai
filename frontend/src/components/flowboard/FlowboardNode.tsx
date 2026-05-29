@@ -25,7 +25,7 @@ export default function FlowboardNode({ id, data, selected }: FlowNodeProps) {
   const kind = nodeData.kind ?? "note";
   const meta = KIND_META[kind] ?? KIND_META.note;
   const Icon = meta.icon;
-  const isFeaturedKind = kind === "character" || kind === "scene" || kind === "storyboard" || kind === "video";
+  const isFeaturedKind = kind === "script" || kind === "scriptboard" || kind === "segment" || kind === "character" || kind === "scene" || kind === "storyboard" || kind === "video" || kind === "merge";
   const reference =
     typeof nodeData.reference === "string"
       ? nodeData.reference
@@ -56,6 +56,12 @@ export default function FlowboardNode({ id, data, selected }: FlowNodeProps) {
     nodeData.output !== null &&
     typeof (nodeData.output as { videoUrl?: unknown }).videoUrl === "string"
       ? String((nodeData.output as { videoUrl?: unknown }).videoUrl)
+      : "";
+  const finalVideoUrl =
+    typeof nodeData.output === "object" &&
+    nodeData.output !== null &&
+    typeof (nodeData.output as { finalVideoUrl?: unknown }).finalVideoUrl === "string"
+      ? String((nodeData.output as { finalVideoUrl?: unknown }).finalVideoUrl)
       : "";
   const duration = Number(nodeData.duration || nodeData.data?.duration || 8);
   const previewSource =
@@ -147,7 +153,26 @@ export default function FlowboardNode({ id, data, selected }: FlowNodeProps) {
 
       <div className="node-body" onClick={fire("select")}>
         {nodeData.prompt ? <div className="node-prompt-preview">{nodeData.prompt}</div> : null}
-        {kind === "video" ? (
+        {kind === "merge" ? (
+          <div className="video-box">
+            <Video size={34} />
+            <span>{finalVideoUrl ? "Final ready" : "Merge"}</span>
+            <button onClick={fire("generate")}>Generate</button>
+            {finalVideoUrl ? (
+              <video
+                className="asset-preview dynamic-media-preview video-preview"
+                style={previewStyle}
+                controls
+                src={finalVideoUrl}
+              />
+            ) : null}
+            {finalVideoUrl ? (
+              <a href={finalVideoUrl} target="_blank" rel="noreferrer" download>
+                Play / Download
+              </a>
+            ) : null}
+          </div>
+        ) : kind === "video" ? (
           <div className="video-box">
             <Video size={34} />
             <span>

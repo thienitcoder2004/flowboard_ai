@@ -1,4 +1,4 @@
-export type NodeKind = 'character' | 'scene' | 'clothes' | 'accessory' | 'action' | 'style' | 'image' | 'storyboard' | 'video' | 'note';
+export type NodeKind = 'character' | 'scene' | 'clothes' | 'accessory' | 'action' | 'style' | 'image' | 'script' | 'scriptboard' | 'segment' | 'storyboard' | 'video' | 'merge' | 'note';
 export type NodeStatus = 'idle' | 'queued' | 'generating' | 'done' | 'failed';
 
 export interface BoardNode {

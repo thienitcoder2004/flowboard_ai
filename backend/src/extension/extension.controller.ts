@@ -106,6 +106,8 @@ export class ExtensionCallbackController {
         : await this.media.storeFromUrl(previewReference, `${filenameBase}.bin`);
 
       if (stored) {
+        const safeVideoUrl = typeof output.videoUrl === 'string' && !output.videoUrl.startsWith('data:') ? output.videoUrl : stored.url;
+        const safeReference = typeof output.reference === 'string' && !output.reference.startsWith('data:') ? output.reference : stored.url;
         return {
           ...output,
           mediaIds: mediaIds.length ? mediaIds : output.mediaIds,
@@ -114,8 +116,8 @@ export class ExtensionCallbackController {
           mediaUrl: stored.url,
           posterMediaId: output.posterMediaId || stored.mediaId,
           posterUrl: output.posterUrl || stored.url,
-          videoUrl: output.videoUrl || stored.url,
-          reference: output.reference || stored.url,
+          videoUrl: safeVideoUrl,
+          reference: safeReference,
         };
       }
       return output;
@@ -129,6 +131,8 @@ export class ExtensionCallbackController {
 
     if (!stored) return output;
 
+    const safeVideoUrl = typeof output.videoUrl === 'string' && !output.videoUrl.startsWith('data:') ? output.videoUrl : stored.url;
+
     return {
       ...output,
       mediaIds: mediaIds.length ? mediaIds : output.mediaIds,
@@ -137,7 +141,7 @@ export class ExtensionCallbackController {
       mediaUrl: stored.url,
       posterMediaId: output.posterMediaId || stored.mediaId,
       posterUrl: output.posterUrl || stored.url,
-      videoUrl: output.videoUrl || stored.url,
+      videoUrl: safeVideoUrl,
       reference: stored.url,
     };
   }

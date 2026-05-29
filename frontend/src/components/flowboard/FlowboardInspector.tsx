@@ -5,10 +5,14 @@ import { mediaUrl } from "./flowboardHelpers";
 import type { FlowNodeType } from "./flowboardTypes";
 
 const PROMPT_LABELS: Record<string, string> = {
+  script: "Script",
+  scriptboard: "Scriptboard",
+  segment: "Segment",
   character: "Nhân vật",
   scene: "Cảnh",
   storyboard: "Storyboard",
   video: "Video",
+  merge: "Merge",
 };
 
 const VIDEO_DURATION_OPTIONS = [
@@ -89,6 +93,12 @@ export default function FlowboardInspector({
   )
     .filter(Boolean)
     .slice(0, 2);
+  const finalVideoUrl =
+    typeof selectedData?.output === "object" &&
+    selectedData.output !== null &&
+    typeof (selectedData.output as { finalVideoUrl?: unknown }).finalVideoUrl === "string"
+      ? String((selectedData.output as { finalVideoUrl?: unknown }).finalVideoUrl)
+      : "";
   const [videoQuality, setVideoQuality] = useState<"2k" | "4k">(
     (selectedData?.videoQuality ?? selectedData?.data?.videoQuality ?? "2k") as
       | "2k"
@@ -191,7 +201,7 @@ export default function FlowboardInspector({
                 void onGenerateWithQuality(selectedNode?.id, videoQuality)
               }
             >
-              <Cable size={15} /> Send Google Flow
+              <Cable size={15} /> {selectedData.kind === "merge" ? "Generate Merge" : "Send Google Flow"}
             </button>
             <button className="danger" onClick={() => void onDeleteSelection()}>
               <Trash2 size={15} /> Xóa node
@@ -255,7 +265,14 @@ export default function FlowboardInspector({
             </div>
           ) : null}
 
-          {selectedData.kind === "video" &&
+          {selectedData.kind === "merge" && finalVideoUrl ? (
+            <div className="empty">
+              <video className="asset-preview video-preview" controls src={finalVideoUrl} />
+              <a href={finalVideoUrl} target="_blank" rel="noreferrer" download>
+                Tải final video
+              </a>
+            </div>
+          ) : selectedData.kind === "video" &&
           typeof selectedData.output === "object" &&
           selectedData.output !== null &&
           typeof (selectedData.output as { videoUrl?: unknown }).videoUrl ===
