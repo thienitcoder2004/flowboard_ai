@@ -27,6 +27,7 @@ export type BoardNodeData = {
   mediaUrls?: string[];
   posterMediaId?: string;
   storyboardGrid?: string;
+  duration?: number;
   durationS?: number;
   videoQuality?: "2k" | "4k";
   videoUrl?: string;
@@ -47,6 +48,7 @@ export type BoardNodeData = {
     mediaUrls?: string[];
     posterMediaId?: string;
     storyboardGrid?: string;
+    duration?: number;
     durationS?: number;
     videoQuality?: "2k" | "4k";
     videoUrl?: string;
@@ -80,6 +82,7 @@ export type ProjectNode = {
   mediaUrls?: string[];
   posterMediaId?: string;
   storyboardGrid?: string;
+  duration?: number;
   durationS?: number;
   videoQuality?: "2k" | "4k";
   videoUrl?: string;
@@ -100,6 +103,7 @@ export type ProjectNode = {
     mediaUrls?: string[];
     posterMediaId?: string;
     storyboardGrid?: string;
+    duration?: number;
     durationS?: number;
     videoQuality?: "2k" | "4k";
     videoUrl?: string;

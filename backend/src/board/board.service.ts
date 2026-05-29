@@ -22,6 +22,10 @@ export class BoardService {
     return this.db.createProject(name);
   }
 
+  deleteProject(projectId: string) {
+    return this.db.deleteProject(projectId);
+  }
+
   addNode(projectId: string, payload: { kind: BoardNode['kind']; title?: string; position?: { x: number; y: number } }) {
     return this.db.addNode(projectId, payload);
   }

@@ -5,6 +5,7 @@ type Props = {
   activeProjectId?: string;
   onCreateProject: () => void | Promise<void>;
   onSelectProject: (projectId: string) => void | Promise<void>;
+  onDeleteProject: (projectId: string) => void | Promise<void>;
 };
 
 export default function FlowboardSidebar({
@@ -12,6 +13,7 @@ export default function FlowboardSidebar({
   activeProjectId,
   onCreateProject,
   onSelectProject,
+  onDeleteProject,
 }: Props) {
   return (
     <aside className="sidebar">
@@ -25,14 +27,22 @@ export default function FlowboardSidebar({
       </button>
 
       {projects.map((project) => (
-        <button
+        <div
           key={project.id}
           className={`project ${project.id === activeProjectId ? "active" : ""}`}
-          onClick={() => void onSelectProject(project.id)}
         >
-          <span>{project.name}</span>
-          <small>{project.nodeCount} nodes</small>
-        </button>
+          <button className="project-select" onClick={() => void onSelectProject(project.id)}>
+            <span>{project.name}</span>
+            <small>{project.nodeCount} nodes</small>
+          </button>
+          <button
+            className="project-delete"
+            aria-label={`Delete project ${project.name}`}
+            onClick={() => void onDeleteProject(project.id)}
+          >
+            ×
+          </button>
+        </div>
       ))}
     </aside>
   );

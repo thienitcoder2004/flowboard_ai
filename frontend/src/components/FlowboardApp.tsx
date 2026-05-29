@@ -161,6 +161,15 @@ export default function FlowboardApp() {
         setSelectedNode(nextNode);
       }
 
+      setProject((currentProject) =>
+        currentProject
+          ? {
+              ...currentProject,
+              nodes: currentProject.nodes.map((node) => (node.id === nodeId ? updated ?? node : node)),
+            }
+          : currentProject,
+      );
+
       return nextNode;
     },
     [project, selectedNode?.id, setNodes],
@@ -317,7 +326,9 @@ export default function FlowboardApp() {
   );
 
   const createProject = useCallback(async () => {
-    const name = window.prompt("Tên project mới:", "Untitled Flow") || "Untitled Flow";
+    const input = window.prompt("Tên project mới:", "Untitled Flow");
+    if (input === null) return;
+    const name = input.trim() || "Untitled Flow";
 
     const nextProject = await readJson<ProjectRecord>(
       await fetch(`${API}/api/projects`, {
@@ -329,6 +340,27 @@ export default function FlowboardApp() {
 
     await load(nextProject.id);
   }, [load]);
+
+  const deleteProject = useCallback(
+    async (projectId: string) => {
+      const projectToDelete = projects.find((item) => item.id === projectId);
+      const confirmed = window.confirm(`Xóa project "${projectToDelete?.name || projectId}"?`);
+      if (!confirmed) return;
+
+      await fetch(`${API}/api/projects/${projectId}`, {
+        method: "DELETE",
+      });
+
+      const nextProjects = await fetch(`${API}/api/projects`).then((response) => response.json() as Promise<ProjectSummary[]>);
+      setProjects(nextProjects);
+
+      const nextActive = nextProjects[0]?.id;
+      if (nextActive) {
+        await load(nextActive);
+      }
+    },
+    [load, projects],
+  );
 
   const savePrompt = useCallback(
     async (targetNodeId = selectedNode?.id, prompt = draftPrompt) => {
@@ -505,6 +537,7 @@ export default function FlowboardApp() {
         setUploadingNodeId(detail.nodeId);
         uploadInputRef.current?.click();
       }
+
     };
 
     window.addEventListener("keydown", onKey);
@@ -568,6 +601,7 @@ export default function FlowboardApp() {
           activeProjectId={project?.id}
           onCreateProject={createProject}
           onSelectProject={(projectId) => void load(projectId)}
+          onDeleteProject={(projectId) => void deleteProject(projectId)}
         />
 
         <main className="workspace">

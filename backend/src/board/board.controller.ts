@@ -11,6 +11,9 @@ export class BoardController {
   @Post()
   create(@Body() body: { name?: string }) { return this.board.createProject(body.name); }
 
+  @Delete(':projectId')
+  deleteProject(@Param('projectId') projectId: string) { return this.board.deleteProject(projectId); }
+
   @Get(':projectId')
   get(@Param('projectId') projectId: string) { return this.board.getProject(projectId); }
 

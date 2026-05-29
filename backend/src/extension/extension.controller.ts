@@ -55,20 +55,21 @@ export class ExtensionCallbackController {
       ? output.mediaUrls.filter((item: unknown) => typeof item === 'string' && item)
       : [];
 
-    const directReference =
+    const directReference = this.pickSafeReference(
       typeof output.reference === 'string'
         ? output.reference
         : typeof output.imageUrl === 'string'
           ? output.imageUrl
           : typeof output.videoUrl === 'string'
             ? output.videoUrl
-            : '';
+            : '',
+    );
 
     const previewReference =
       directReference ||
-      (typeof output.mediaUrl === 'string' ? output.mediaUrl : '') ||
-      (typeof output.posterUrl === 'string' ? output.posterUrl : '') ||
-      (typeof output.mediaUrls?.[0] === 'string' ? output.mediaUrls[0] : '');
+      this.pickSafeReference(typeof output.mediaUrl === 'string' ? output.mediaUrl : '') ||
+      this.pickSafeReference(typeof output.posterUrl === 'string' ? output.posterUrl : '') ||
+      this.pickSafeReference(typeof output.mediaUrls?.[0] === 'string' ? output.mediaUrls[0] : '');
 
     if (mediaUrls.length > 0 && !output.mediaUrl && !output.videoUrl && !output.posterUrl) {
       const storedUrls: string[] = [];
@@ -139,5 +140,11 @@ export class ExtensionCallbackController {
       videoUrl: output.videoUrl || stored.url,
       reference: stored.url,
     };
+  }
+
+  private pickSafeReference(value: string) {
+    if (!value) return '';
+    if (/^[a-zA-Z]:[\\/]/.test(value) || /^file:\/\//i.test(value)) return '';
+    return value;
   }
 }

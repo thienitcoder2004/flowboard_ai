@@ -54,8 +54,14 @@ export class GenerationService {
 
   private validateNode(node: BoardNode, context: ReturnType<GenerationService['buildContext']>) {
     if (node.kind === 'storyboard') {
-      const missing = ['character', 'scene'].filter((kind) => !context.inputs[kind as keyof typeof context.inputs]?.length);
-      if (missing.length) return `Missing required inputs: ${missing.join(', ')}`;
+      const requiredInputs = [
+        ...context.inputs.character,
+        ...context.inputs.scene,
+        ...context.inputs.image,
+      ];
+      if (requiredInputs.length < 2) {
+        return 'Storyboard requires at least 2 input nodes (character / scene / image)';
+      }
     }
     if (node.kind === 'video') {
       const storyboard = context.storyboard;
@@ -102,13 +108,46 @@ export class GenerationService {
       style: this.pickPrompt(inputs.style[0]),
     };
 
-    return { node, inputs, storyboard, primary };
+    const cast = inputs.character.map((item) => this.pickPrompt(item)).filter(Boolean);
+    const scenes = inputs.scene.map((item) => this.pickPrompt(item)).filter(Boolean);
+
+    return { node, inputs, storyboard, primary, cast, scenes };
   }
 
   private composePrompt(node: BoardNode, upstream: BoardNode[]) {
     const parts = upstream.map((n) => `${n.title}: ${n.data?.prompt || n.output?.description || ''}`).filter(Boolean);
     parts.push(`${node.title}: ${node.data?.prompt || ''}`);
-    return parts.join('\n');
+    const prompt = parts.join('\n');
+    if (node.kind === 'note') return prompt;
+    return `${prompt}\n\n${this.buildReferenceGuidance(upstream)}`;
+  }
+
+  private buildReferenceGuidance(upstream: BoardNode[]) {
+    const hasReferenceInput = upstream.some((item) =>
+      Boolean(
+        item.data?.reference ||
+        item.data?.mediaId ||
+        item.output?.mediaId ||
+        item.output?.mediaUrl ||
+        item.output?.posterMediaId ||
+        item.output?.reference,
+      ),
+    );
+
+    const base = [
+      'Ràng buộc mặc định: giữ đúng chủ thể gốc theo ảnh tham chiếu (khuôn mặt, hình dạng, màu sắc, chi tiết nhận diện, thiết kế chính).',
+      'Chỉ thay đổi tư thế, góc máy, hành động, và bối cảnh nếu prompt yêu cầu.',
+      'Nếu prompt không yêu cầu thay đổi, phải giữ nguyên chủ thể như ảnh gốc.',
+      'Không trộn lẫn hay thay thế sang chủ thể khác.',
+    ];
+
+    if (hasReferenceInput) {
+      base.unshift(
+        'Ưu tiên bám sát ảnh input rõ, sáng, ít nhiễu; giữ nguyên đặc điểm nhận diện của chủ thể trong ảnh tham chiếu.',
+      );
+    }
+
+    return base.join(' ');
   }
 
   private async mockOutput(node: BoardNode, prompt: string, context: ReturnType<GenerationService['buildContext']>, jobId: string) {
@@ -145,6 +184,8 @@ export class GenerationService {
       description: 'Storyboard 4 khung đã được tạo từ các node đầu vào.',
       prompt,
       inputs: context.primary,
+      cast: context.cast,
+      scenes: context.scenes,
       storyboardGrid: '2x2',
       panelPrompts: frames.map((frame) => frame.prompt),
       frames,
@@ -154,6 +195,8 @@ export class GenerationService {
 
   private async mockVideoOutput(prompt: string, context: ReturnType<GenerationService['buildContext']>, jobId: string) {
     const storyboardOutput = context.storyboard?.output || {};
+    const cast = Array.isArray((storyboardOutput as { cast?: unknown }).cast) ? (storyboardOutput as { cast?: string[] }).cast : context.cast;
+    const scenes = Array.isArray((storyboardOutput as { scenes?: unknown }).scenes) ? (storyboardOutput as { scenes?: string[] }).scenes : context.scenes;
     const storyboardFrames = Array.isArray(storyboardOutput.frames) && storyboardOutput.frames.length
       ? storyboardOutput.frames
       : Array.isArray(storyboardOutput.mediaUrls) && storyboardOutput.mediaUrls.length
@@ -170,9 +213,11 @@ export class GenerationService {
     const svg = this.buildVideoPosterSvg(context, prompt);
     const stored = await this.svgToMedia(svg, `${jobId}-video-poster.svg`);
     return {
-      description: 'Video mock 5 giây đã sẵn sàng.',
+      description: 'Video mock 8 giây đã sẵn sàng.',
       prompt,
-      durationS: Number(context.node.data?.duration || 5),
+      durationS: Number(context.node.data?.duration || 8),
+      cast,
+      scenes,
       mediaId: stored?.mediaId,
       mediaUrl: stored?.mediaUrl,
       posterMediaId: stored?.mediaId,
@@ -183,18 +228,22 @@ export class GenerationService {
   }
 
   private buildStoryboardFrames(context: ReturnType<GenerationService['buildContext']>, prompt: string) {
-    const subject = context.primary.character || 'Nhân vật chính';
-    const scene = context.primary.scene || 'bối cảnh';
+    const cast = context.cast.length ? context.cast : [context.primary.character || 'Nhân vật chính'];
+    const scenes = context.scenes.length ? context.scenes : [context.primary.scene || 'bối cảnh'];
+    const castText = cast.length === 1 ? cast[0] : cast.map((item, index) => `NV${index + 1}: ${item}`).join('; ');
+    const sceneText1 = scenes[0] || 'bối cảnh';
+    const sceneText2 = scenes[1] || scenes[0] || 'bối cảnh';
     const clothes = context.primary.clothes ? `, mặc ${context.primary.clothes}` : '';
     const accessory = context.primary.accessory ? `, có ${context.primary.accessory}` : '';
     const style = context.primary.style ? ` theo phong cách ${context.primary.style}` : '';
     const action = context.primary.action || 'đang di chuyển';
+    const castInScene = cast.length > 1 ? `${castText}` : castText;
 
     return [
-      { title: 'Frame 1', prompt: `${subject} ở ${scene}${clothes}${accessory}${style}. Mở cảnh.` },
-      { title: 'Frame 2', prompt: `${subject} bắt đầu ${action}${clothes}${accessory}${style}.` },
-      { title: 'Frame 3', prompt: `${subject} cao trào ${action} trong ${scene}${clothes}${accessory}${style}.` },
-      { title: 'Frame 4', prompt: `${subject} kết thúc cảnh với cảm xúc vui vẻ${style}.` },
+      { title: 'Frame 1', prompt: `${castInScene} ở ${sceneText1}${clothes}${accessory}${style}. Mở cảnh.` },
+      { title: 'Frame 2', prompt: `${castInScene} bắt đầu ${action} trong ${sceneText1}${clothes}${accessory}${style}.` },
+      { title: 'Frame 3', prompt: `${castInScene} cao trào ${action} từ ${sceneText1} sang ${sceneText2}${clothes}${accessory}${style}.` },
+      { title: 'Frame 4', prompt: `${castInScene} kết thúc cảnh ở ${sceneText2} với cảm xúc vui vẻ${style}.` },
     ].map((frame, index) => ({
       ...frame,
       index: index + 1,

@@ -69,12 +69,26 @@ export class FlowboardDbService {
   }
 
   createProject(name = 'Untitled Flow') {
-    const now = new Date().toISOString();
-    const project: Project = { id: randomUUID(), name, nodes: [], edges: [], createdAt: now, updatedAt: now };
+    const project = this.createProjectRecord(name);
     this.write((state) => {
       state.projects.unshift(project);
     });
     return clone(project);
+  }
+
+  deleteProject(projectId: string) {
+    let deleted = false;
+    this.write((state) => {
+      const before = state.projects.length;
+      state.projects = state.projects.filter((project) => project.id !== projectId);
+      deleted = state.projects.length !== before;
+
+      if (state.projects.length === 0) {
+        state.projects.unshift(this.createProjectRecord('Untitled Flow'));
+      }
+    });
+
+    return { ok: deleted, projectId };
   }
 
   addNode(projectId: string, payload: { kind: NodeKind; title?: string; position?: { x: number; y: number } }) {
@@ -274,6 +288,11 @@ export class FlowboardDbService {
     };
   }
 
+  private createProjectRecord(name = 'Untitled Flow'): Project {
+    const now = new Date().toISOString();
+    return { id: randomUUID(), name, nodes: [], edges: [], createdAt: now, updatedAt: now };
+  }
+
   private titleFromKind(kind: NodeKind) {
     const map: Record<NodeKind, string> = {
       character: 'Nhân vật', scene: 'Cảnh', clothes: 'Quần áo', accessory: 'Phụ kiện', action: 'Hành động', style: 'Phong cách', image: 'Image', storyboard: 'Storyboard', video: 'Video', note: 'Note',
@@ -283,7 +302,7 @@ export class FlowboardDbService {
 
   private defaultData(kind: NodeKind) {
     if (kind === 'storyboard') return { layout: '2x2', prompt: '' };
-    if (kind === 'video') return { duration: 5, prompt: '' };
+    if (kind === 'video') return { duration: 8, prompt: '' };
     return { prompt: '', reference: '' };
   }
 

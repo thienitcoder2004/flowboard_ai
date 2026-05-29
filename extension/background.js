@@ -686,7 +686,7 @@ async function fetchPaygateTier() {
 
 async function refreshPaygateTierIfStale(force = false) {
   if (!flowKey) return null;
-  if (!force && Date.now() - lastBillingFetchAt < 5 * 60 * 1000) return paygateTier;
+  if (!force && Date.now() - lastBillingFetchAt < 5 * 60) return paygateTier;
   return fetchPaygateTier();
 }
 
@@ -719,6 +719,10 @@ async function ensureFlowProject(localProjectId, localProjectName) {
 }
 
 async function uploadLocalMediaToFlow(projectId, sourceUrl, fileName) {
+  if (isLocalFileReference(sourceUrl)) {
+    return { error: 'LOCAL_FILE_PATH_NOT_SUPPORTED', raw: { sourceUrl, fileName } };
+  }
+
   const response = await fetch(sourceUrl, { credentials: 'include' });
   if (!response.ok) {
     return { error: `SOURCE_MEDIA_FETCH_${response.status}` };
@@ -761,10 +765,37 @@ function pickVideoSource(job) {
   for (const item of candidates) {
     const mediaId = item?.output?.mediaId || item?.output?.posterMediaId || item?.output?.mediaIds?.[0] || item?.data?.mediaId;
     if (typeof mediaId !== 'string' || !mediaId) continue;
-    const mediaUrl = item?.output?.mediaUrl || item?.output?.videoUrl || item?.output?.reference || item?.data?.reference || `http://127.0.0.1:8101/media/${mediaId}`;
+    const mediaUrl = pickSafeMediaUrl(item, mediaId);
     return { mediaId, mediaUrl, title: item?.title || item?.kind || 'source' };
   }
   return null;
+}
+
+function isLocalFileReference(value) {
+  return typeof value === 'string' && (
+    /^[a-zA-Z]:[\\/]/.test(value) ||
+    /^file:\/\//i.test(value)
+  );
+}
+
+function pickSafeMediaUrl(item, mediaId) {
+  const candidates = [
+    item?.output?.mediaUrl,
+    item?.output?.videoUrl,
+    item?.output?.posterUrl,
+    item?.output?.reference,
+    item?.data?.reference,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'string' || !candidate) continue;
+    if (isLocalFileReference(candidate)) continue;
+    if (candidate.startsWith('http://') || candidate.startsWith('https://') || candidate.startsWith('data:')) {
+      return candidate;
+    }
+  }
+
+  return mediaId ? `http://127.0.0.1:8101/media/${mediaId}` : '';
 }
 
 function resolveVideoModelKey(quality, tier) {
@@ -782,7 +813,7 @@ function collectStoryboardRefs(job) {
     if (!item || !['character', 'scene', 'image'].includes(item.kind)) continue;
     const mediaId = item?.output?.mediaId || item?.output?.posterMediaId || item?.output?.mediaIds?.[0] || item?.data?.mediaId;
     if (typeof mediaId !== 'string' || !mediaId) continue;
-    const mediaUrl = item?.output?.mediaUrl || item?.output?.reference || item?.data?.reference || `http://127.0.0.1:8101/media/${mediaId}`;
+    const mediaUrl = pickSafeMediaUrl(item, mediaId);
     refs.push({ mediaId, mediaUrl, title: item?.title || item?.kind || 'source' });
   }
   return refs;
@@ -965,17 +996,17 @@ async function generateVideoWithGoogleFlow(job) {
     const pollOps = operationNames.filter((name) => !workflows.find((wf) => wf.name === name));
     const pollResult = pollOps.length
       ? await flowApiRequest(FLOW_VIDEO_CHECK_URL, {
-          method: 'POST',
-          headers: {
-            'content-type': 'text/plain;charset=UTF-8',
-            accept: '*/*',
-            origin: 'https://labs.google',
-            referer: 'https://labs.google/',
-          },
-          body: {
-            operations: pollOps.map((name) => ({ operation: { name } })),
-          },
-        })
+        method: 'POST',
+        headers: {
+          'content-type': 'text/plain;charset=UTF-8',
+          accept: '*/*',
+          origin: 'https://labs.google',
+          referer: 'https://labs.google/',
+        },
+        body: {
+          operations: pollOps.map((name) => ({ operation: { name } })),
+        },
+      })
       : { data: {} };
 
     if (pollResult?.error) continue;
@@ -1194,6 +1225,15 @@ function promptOf(item) {
   return item?.data?.prompt || item?.output?.description || '';
 }
 
+function promptGuard() {
+  return [
+    'Ràng buộc mặc định: giữ đúng chủ thể gốc theo ảnh tham chiếu (khuôn mặt, hình dạng, màu sắc, chi tiết nhận diện, thiết kế chính).',
+    'Chỉ thay đổi tư thế, góc máy, hành động, và bối cảnh nếu prompt yêu cầu.',
+    'Nếu prompt không yêu cầu thay đổi, phải giữ nguyên chủ thể như ảnh gốc.',
+    'Không trộn lẫn hay thay thế sang chủ thể khác.',
+  ].join('\n');
+}
+
 function buildStoryboardOutput(job) {
   const character = summarizeInput(job, 'character');
   const scene = summarizeInput(job, 'scene');
@@ -1223,6 +1263,7 @@ function buildStoryboardOutput(job) {
     inputs.accessory ? `Phụ kiện: ${inputs.accessory}.` : null,
     inputs.action ? `Hành động: ${inputs.action}.` : null,
     inputs.style ? `Phong cách: ${inputs.style}.` : null,
+    promptGuard(),
     `Yêu cầu: Giữ nhân vật nhất quán, tạo 4 khung liên tiếp.`,
   ].filter(Boolean).join('\n');
 
@@ -1244,31 +1285,35 @@ function buildStoryboardOutput(job) {
 function buildVideoOutput(job) {
   const storyboard = summarizeInput(job, 'storyboard');
   const storyboardOutput = storyboard?.output || job?.context?.storyboard?.output || {};
+  const cast = Array.isArray(storyboardOutput.cast) && storyboardOutput.cast.length ? storyboardOutput.cast : [];
+  const scenes = Array.isArray(storyboardOutput.scenes) && storyboardOutput.scenes.length ? storyboardOutput.scenes : [];
   const frames = (Array.isArray(storyboardOutput.frames) && storyboardOutput.frames.length)
     ? storyboardOutput.frames
     : Array.isArray(storyboardOutput.mediaUrls) && storyboardOutput.mediaUrls.length
       ? storyboardOutput.mediaUrls.slice(0, 4).map((src, index) => ({
-          title: `Shot ${index + 1}`,
-          prompt: src,
-        }))
+        title: `Shot ${index + 1}`,
+        prompt: src,
+      }))
       : Array.isArray(storyboardOutput.mediaIds) && storyboardOutput.mediaIds.length
         ? storyboardOutput.mediaIds.slice(0, 4).map((id, index) => ({
-            title: `Shot ${index + 1}`,
-            prompt: id,
-          }))
+          title: `Shot ${index + 1}`,
+          prompt: id,
+        }))
         : [];
   if (!frames.length) {
     return { error: 'MISSING_STORYBOARD_FRAMES' };
   }
 
-  const duration = Number(job?.node?.data?.duration || job?.context?.node?.data?.duration || 5);
+  const duration = Number(job?.node?.data?.duration || job?.context?.node?.data?.duration || 8);
   return {
     description: 'Video đã được sinh từ storyboard.',
     frames,
+    cast,
+    scenes,
     duration,
     videoUrl: `/outputs/video/${job.id}.mp4`,
     downloadUrl: `/outputs/video/${job.id}.mp4`,
-    prompt: job.prompt || '',
+    prompt: `${promptGuard()}\n\n${job.prompt || ''}`.trim(),
   };
 }
 

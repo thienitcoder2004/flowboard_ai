@@ -50,21 +50,39 @@ button {
   color: #b7c5d8;
 }
 .project {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+.project-select {
+  flex: 1;
   padding: 10px;
   border-radius: 9px;
   background: #151129;
   border: 1px solid #33215f;
-  margin: 8px 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
+  text-align: left;
+  cursor: pointer;
 }
-.project span {
+.project-select span {
   color: #c4a5ff;
   font-weight: 700;
 }
-.project small {
+.project-select small {
   color: #7e8ca3;
+}
+.project-delete {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid #3a2230;
+  background: #23111a;
+  color: #fca5a5;
+  cursor: pointer;
 }
 .workspace {
   display: grid;
@@ -155,6 +173,36 @@ button {
   box-shadow: 0 18px 50px #0008;
   overflow: hidden;
 }
+.flow-node.flow-node--featured {
+  width: 320px;
+  min-height: 228px;
+}
+.flow-node.flow-node--featured .node-body {
+  padding-bottom: 14px;
+}
+.flow-node.flow-node--featured .image-box,
+.flow-node.flow-node--featured .video-box,
+.flow-node.flow-node--featured .story-grid {
+  min-height: 132px;
+}
+.flow-node.flow-node--featured .asset-preview {
+  height: 112px;
+}
+.flow-node.flow-node--featured .storyboard-preview,
+.flow-node.flow-node--featured .story-preview-grid {
+  height: 112px;
+}
+.node-prompt-preview {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid #263044;
+  border-radius: 8px;
+  background: rgba(9, 13, 21, 0.85);
+  color: #aebbd0;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
 .flow-node.selected {
   box-shadow:
     0 0 0 1px #3b82f6,
@@ -238,6 +286,11 @@ button {
   border-radius: 6px;
   border: 1px solid #2d3850;
 }
+.dynamic-media-preview {
+  height: auto !important;
+  display: block;
+  object-fit: cover;
+}
 .image-preview-clickable {
   cursor: pointer;
 }
@@ -264,6 +317,9 @@ button {
   grid-column: auto;
   grid-row: auto;
   height: 92px;
+}
+.story-preview-grid .storyboard-preview.dynamic-media-preview {
+  height: auto !important;
 }
 .storyboard-inspector-preview {
   display: grid;
@@ -487,6 +543,14 @@ button {
   color: #dce6f4;
   padding: 12px;
   resize: vertical;
+}
+.inspector select {
+  width: 100%;
+  background: #111827;
+  border: 1px solid #2a354b;
+  border-radius: 12px;
+  color: #dce6f4;
+  padding: 11px 12px;
 }
 .actions {
   display: grid;

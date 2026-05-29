@@ -61,6 +61,7 @@ export function toFlowNode(node: ProjectNode): FlowNodeType {
     mediaUrls?: unknown;
     posterMediaId?: unknown;
     storyboardGrid?: unknown;
+    duration?: unknown;
     durationS?: unknown;
     videoQuality?: unknown;
     videoUrl?: unknown;
@@ -109,6 +110,7 @@ export function toFlowNode(node: ProjectNode): FlowNodeType {
       mediaUrls,
       posterMediaId,
       storyboardGrid: typeof output.storyboardGrid === 'string' ? output.storyboardGrid : node.data?.storyboardGrid,
+      duration: typeof node.duration === 'number' ? node.duration : typeof node.data?.duration === 'number' ? node.data.duration : undefined,
       durationS: typeof output.durationS === 'number' ? output.durationS : node.data?.durationS,
       videoQuality: typeof node.videoQuality === 'string' ? node.videoQuality as '2k' | '4k' : node.data?.videoQuality,
       prompt: node.data?.prompt ?? node.prompt,
